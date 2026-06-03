@@ -1,0 +1,69 @@
+{
+  "presets": [
+    {
+      "name": "Basic Attack",
+      "roll_type": "attack",
+      "dice_formula": "1d20",
+      "modifiers": [
+        {
+          "name": "Ability",
+          "value": 0,
+          "enabled": true
+        },
+        {
+          "name": "Proficiency",
+          "value": 0,
+          "enabled": true
+        }
+      ],
+      "description": "Basic attack roll",
+      "total_modifier": 0,
+      "full_formula": "1d20"
+    },
+    {
+      "name": "Basic Damage",
+      "roll_type": "damage",
+      "dice_formula": "1d8",
+      "modifiers": [
+        {
+          "name": "Ability",
+          "value": 0,
+          "enabled": true
+        }
+      ],
+      "description": "Basic weapon damage",
+      "total_modifier": 0,
+      "full_formula": "1d8"
+    },
+    {
+      "name": "Ability Check",
+      "roll_type": "ability_check",
+      "dice_formula": "1d20",
+      "modifiers": [
+        {
+          "name": "Ability",
+          "value": 0,
+          "enabled": true
+        }
+      ],
+      "description": "Generic ability check",
+      "total_modifier": 0,
+      "full_formula": "1d20"
+    },
+    {
+      "name": "Saving Throw",
+      "roll_type": "saving_throw",
+      "dice_formula": "1d20",
+      "modifiers": [
+        {
+          "name": "Save",
+          "value": 0,
+          "enabled": true
+        }
+      ],
+      "description": "Generic saving throw",
+      "total_modifier": 0,
+      "full_formula": "1d20"
+    }
+  ]
+}

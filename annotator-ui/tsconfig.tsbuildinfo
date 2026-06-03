@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/AnnotationPanel.tsx","./src/components/AnnotatorCanvas.tsx","./src/components/BBoxList.tsx","./src/components/ImageNavigator.tsx","./src/components/Toolbar.tsx"],"version":"5.9.3"}

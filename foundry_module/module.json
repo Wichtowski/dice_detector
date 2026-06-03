@@ -1,0 +1,20 @@
+{
+  "id": "dice-detector",
+  "title": "Dice Detector Integration",
+  "description": "Receives roll results from the D&D Dice Detector application",
+  "version": "0.1.0",
+  "compatibility": {
+    "minimum": "10",
+    "verified": "11"
+  },
+  "authors": [
+    {
+      "name": "Dice Detector",
+      "url": "https://github.com/wichtowski/dice-detector"
+    }
+  ],
+  "esmodules": ["scripts/main.js"],
+  "styles": ["styles/dice-detector.css"],
+  "socket": true,
+  "flags": {}
+}
