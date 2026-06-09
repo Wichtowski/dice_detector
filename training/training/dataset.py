@@ -53,7 +53,7 @@ class DatasetManager:
                     "D10": 3,
                     "D12": 4,
                     "D20": 5,
-                    "D100_TENS": 6,
+                    "D100": 6,
                 },
                 "statistics": {
                     "total_images": 0,

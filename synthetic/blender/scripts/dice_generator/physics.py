@@ -70,6 +70,7 @@ def simulate_until_settled(config: GeneratorConfig) -> int:
     if rbw:
         rbw.point_cache.frame_start = config.physics_start_frame
         rbw.point_cache.frame_end = config.physics_end_frame
+        rbw.time_scale = config.physics_time_scale
 
     # Start from beginning
     scene.frame_set(config.physics_start_frame)

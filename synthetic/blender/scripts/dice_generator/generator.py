@@ -6,13 +6,19 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from .bbox import compute_object_bbox_2d
+from .bbox import (
+    assign_pass_indices,
+    compute_bboxes_from_index_pass,
+    compute_object_bbox_2d,
+    setup_object_index_pass,
+)
 from .camera import get_or_create_camera, randomize_camera
 from .config import GeneratorConfig
 from .parsers import parse_die_name, parse_face_marker_name
 from .physics import clear_physics_cache, setup_rigid_body, simulate_until_settled
 from .scene import (
     clear_generated_objects,
+    compute_tray_raw_bounds,
     compute_tray_spawn_bounds,
     determine_rolled_value,
     duplicate_die_asset,
@@ -29,6 +35,34 @@ except ImportError:
 
 GENERATOR_VERSION = "2.0.0"
 SIX_NINE_AMBIGUITY_DICES = ["D10", "D12", "D20"]
+
+
+def _kelvin_to_rgb(kelvin: float) -> tuple[float, float, float]:
+    """Convert color temperature in Kelvin to normalized RGB (simplified blackbody)."""
+    temp = kelvin / 100.0
+
+    # Red
+    if temp <= 66:
+        r = 1.0
+    else:
+        r = max(0.0, min(1.0, 1.292936186 * ((temp - 60) ** -0.1332047592)))
+
+    # Green
+    if temp <= 66:
+        g = max(0.0, min(1.0, 0.390081579 * math.log(temp) - 0.631841444))
+    else:
+        g = max(0.0, min(1.0, 1.129890861 * ((temp - 60) ** -0.0755148492)))
+
+    # Blue
+    if temp >= 66:
+        b = 1.0
+    elif temp <= 19:
+        b = 0.0
+    else:
+        b = max(0.0, min(1.0, 0.543206789 * math.log(temp - 10) - 1.19625408))
+
+    return (r, g, b)
+
 
 class BlenderDiceGenerator:
     """Generates synthetic dice dataset using prepared Blender assets."""
@@ -47,14 +81,17 @@ class BlenderDiceGenerator:
 
         self.available_dice = []
         self.spawn_bounds = None
+        self.tray_bounds = None
         self.generated_dice = []
         self.visible_source_dice = []  # Source dice that are visible (not hidden)
+        self._compositor_available = False
         self.logger = None
 
     def _setup_logging(self):
         """Set up file logging for errors."""
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = self.logs_dir / f"generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        worker_suffix = f"_w{self.config.worker_id}" if self.config.worker_id > 0 else ""
+        log_file = self.logs_dir / f"generation_{datetime.now().strftime('%Y%m%d_%H%M%S')}{worker_suffix}.log"
 
         self.logger = logging.getLogger("dice_generator")
         self.logger.setLevel(logging.DEBUG)
@@ -112,13 +149,17 @@ class BlenderDiceGenerator:
             print("  WARNING: No face markers found on any dice! Value detection will fail.")
             print("  Expected marker names like: D20_14, D6_3, D4_2, etc.")
 
-        # Compute spawn bounds
+        # Compute tray bounds (raw for camera, with margin for spawning)
+        self.tray_bounds = compute_tray_raw_bounds(self.config)
         self.spawn_bounds = compute_tray_spawn_bounds(self.config)
         print(f"Spawn bounds: x=[{self.spawn_bounds[0]:.3f}, {self.spawn_bounds[1]:.3f}], "
               f"y=[{self.spawn_bounds[2]:.3f}, {self.spawn_bounds[3]:.3f}]")
 
         # Set up render settings
         self._setup_render_settings()
+
+        # Enable Object Index pass for pixel-perfect bboxes
+        self._compositor_available = setup_object_index_pass()
 
         # Set up tray physics
         self._setup_tray_physics()
@@ -132,6 +173,22 @@ class BlenderDiceGenerator:
         scene.render.resolution_x = self.config.image_width
         scene.render.resolution_y = self.config.image_height
         scene.cycles.samples = self.config.render_samples
+
+        scene.cycles.use_adaptive_sampling = True
+        scene.cycles.adaptive_threshold = 0.05
+        scene.cycles.max_bounces = 4
+        scene.cycles.diffuse_bounces = 2
+        scene.cycles.glossy_bounces = 2
+        scene.cycles.transmission_bounces = 4
+
+        # Use GPU if available
+        scene.cycles.device = "GPU"
+        prefs = bpy.context.preferences.addons.get("cycles")
+        if prefs:
+            prefs.preferences.compute_device_type = "HIP"  # AMD
+            prefs.preferences.get_devices()
+            for device in prefs.preferences.devices:
+                device.use = True
 
         if self.config.enable_denoising:
             scene.cycles.use_denoising = True
@@ -168,24 +225,62 @@ class BlenderDiceGenerator:
                     obj.hide_viewport = True
 
     def _randomize_source_dice_visibility(self):
-        """Randomly show some source dice (between 30-70% of available dice).
+        """Randomly show some source dice with class-balanced selection.
 
-        Ensures D100+D10 pairing: whenever a D100 is visible, a D10 of the same
-        material must also be visible. Positions oscillate around the tray center
-        with slight random shifts for better augmentation.
+        Uses config min_dice_per_image / max_dice_per_image to control count.
+        Balances selection across dice types so each class gets roughly equal
+        representation across the dataset.
+        Handles D100 solo mode: D100+D10 pair thrown alone with a configured
+        probability. Otherwise ensures D100+D10 pairing within normal rolls.
         """
         self.visible_source_dice = []
 
-        # Determine how many dice to show (30-70% of available)
-        min_visible = max(1, int(len(self.available_dice) * 0.3))
-        max_visible = int(len(self.available_dice) * 0.7)
-        num_visible = random.randint(min_visible, max_visible)
+        # Check for D100 solo roll
+        is_d100_solo = (
+            self.config.d100_solo_mode
+            and random.random() < self.config.d100_solo_probability
+        )
 
-        # Randomly select which dice to show
-        visible_dice = list(random.sample(self.available_dice, num_visible))
+        if is_d100_solo:
+            visible_dice = self._pick_d100_solo_dice()
+        else:
+            # Normal roll: class-balanced selection (excluding D100)
+            non_d100 = [
+                d for d in self.available_dice
+                if not (parse_die_name(d.name) and parse_die_name(d.name).dice_type == "D100")
+            ]
 
-        # Ensure D100+D10 pairing: if a D100 is visible, its matching D10 must be too
-        visible_dice = self._ensure_d100_d10_pairing(visible_dice)
+            # Group by dice type
+            by_type = {}
+            for d in non_d100:
+                parsed = parse_die_name(d.name)
+                if parsed:
+                    dtype = parsed.dice_type
+                    by_type.setdefault(dtype, []).append(d)
+
+            min_visible = max(1, self.config.min_dice_per_image)
+            max_visible = min(self.config.max_dice_per_image, len(non_d100))
+            if min_visible > max_visible:
+                min_visible = max_visible
+            num_visible = random.randint(min_visible, max_visible)
+
+            # Round-robin across types to ensure balance
+            types = list(by_type.keys())
+            random.shuffle(types)
+            visible_dice = []
+            type_idx = 0
+            while len(visible_dice) < num_visible and types:
+                dtype = types[type_idx % len(types)]
+                available = [d for d in by_type[dtype] if d not in visible_dice]
+                if available:
+                    visible_dice.append(random.choice(available))
+                else:
+                    types.remove(dtype)
+                    if not types:
+                        break
+                    type_idx = type_idx % len(types)
+                    continue
+                type_idx += 1
 
         # First hide all source dice
         for die in self.available_dice:
@@ -279,6 +374,79 @@ class BlenderDiceGenerator:
 
         return visible_dice
 
+    def _pick_d100_solo_dice(self) -> list:
+        """Pick a random D100 + its matching D10 for a solo roll."""
+        d100_dice = [
+            d for d in self.available_dice
+            if parse_die_name(d.name) and parse_die_name(d.name).dice_type == "D100"
+        ]
+        if not d100_dice:
+            return []
+
+        d100 = random.choice(d100_dice)
+        d100_parsed = parse_die_name(d100.name)
+        result = [d100]
+
+        # Find matching D10
+        for die in self.available_dice:
+            parsed = parse_die_name(die.name)
+            if (parsed and parsed.dice_type == "D10"
+                    and parsed.material_number == d100_parsed.material_number):
+                result.append(die)
+                print(f"  D100 solo roll: {d100.name} + {die.name}")
+                break
+
+        return result
+
+    def _randomize_resolution(self):
+        """Randomize image resolution from configured presets."""
+        if not self.config.randomize_resolution:
+            return
+
+        preset = random.choice(self.config.resolution_presets)
+        base = self.config.resolution_base
+
+        ratio_map = {
+            "16:9": (base * 16 // 9, base),
+            "9:16": (base, base * 16 // 9),
+            "1:1": (base, base),
+            "4:3": (base * 4 // 3, base),
+            "3:4": (base, base * 4 // 3),
+        }
+
+        w, h = ratio_map.get(preset, (1920, 1080))
+        scene = bpy.context.scene
+        scene.render.resolution_x = w
+        scene.render.resolution_y = h
+        # Update config so camera height computation uses correct aspect
+        self.config.image_width = w
+        self.config.image_height = h
+
+    def _randomize_lighting(self):
+        """Randomize scene lighting for augmentation."""
+        if not self.config.randomize_lighting:
+            return
+
+        for obj in bpy.data.objects:
+            if obj.type != "LIGHT":
+                continue
+
+            light = obj.data
+
+            # Randomize energy
+            light.energy = random.uniform(
+                self.config.light_energy_min,
+                self.config.light_energy_max,
+            )
+
+            # Randomize color temperature (warm to cool)
+            temp = random.uniform(
+                self.config.light_color_temperature_min,
+                self.config.light_color_temperature_max,
+            )
+            # Convert temperature to RGB (simplified blackbody approximation)
+            light.color = _kelvin_to_rgb(temp)
+
     def _find_layer_collection(self, layer_coll, name: str):
         """Recursively find a layer collection by name."""
         if layer_coll.name == name:
@@ -304,27 +472,20 @@ class BlenderDiceGenerator:
         successful = 0
         errors = []
         for i in range(num_images):
+            global_index = self.config.start_index + i
             try:
-                self._generate_single_image(i)
+                self._generate_single_image(global_index)
                 successful += 1
                 if (i + 1) % 10 == 0:
-                    self.logger.info(f"Progress: {i + 1}/{num_images} images ({successful} successful)")
-
-                # Debug pause after first image
-                if i == 0 and self.config.debug_pause_after_first:
-                    self.logger.info("First image generated. Check output and press Enter to continue or Ctrl+C to abort...")
-                    try:
-                        input()
-                    except EOFError:
-                        pass  # Non-interactive mode, continue
+                    self.logger.info(f"[Worker {self.config.worker_id}] Progress: {i + 1}/{num_images} images ({successful} successful)")
 
             except Exception as e:
-                error_msg = f"Error generating image {i}: {e}\n{traceback.format_exc()}"
+                error_msg = f"[Worker {self.config.worker_id}] Error generating image {global_index}: {e}\n{traceback.format_exc()}"
                 self.logger.error(error_msg)
-                errors.append({"image_index": i, "error": str(e), "traceback": traceback.format_exc()})
+                errors.append({"image_index": global_index, "error": str(e), "traceback": traceback.format_exc()})
 
         self._save_generation_metadata(successful, errors)
-        self.logger.info(f"Dataset generation complete: {successful}/{num_images} images")
+        self.logger.info(f"[Worker {self.config.worker_id}] Dataset generation complete: {successful}/{num_images} images")
 
     def _ensure_dirs(self):
         """Create output directories."""
@@ -336,6 +497,20 @@ class BlenderDiceGenerator:
 
     def _generate_single_image(self, index: int):
         """Generate a single image with annotations."""
+        image_id = f"render_{index:06d}"
+        image_path = self.images_dir / f"{image_id}.png"
+        annotation_path = self.annotations_dir / f"{image_id}.json"
+
+        if self.config.skip_existing and image_path.exists() and annotation_path.exists():
+            self.logger.debug(f"Skipping {image_id} (already exists)")
+            return
+
+        # Randomize resolution for this image
+        self._randomize_resolution()
+
+        # Randomize lighting
+        self._randomize_lighting()
+
         # Clear physics cache for fresh simulation
         clear_physics_cache()
 
@@ -358,17 +533,37 @@ class BlenderDiceGenerator:
         # Randomize camera
         camera = get_or_create_camera()
         if camera:
-            randomize_camera(camera, self.config)
+            randomize_camera(camera, self.config, tray_bounds=self.tray_bounds)
             bpy.context.scene.camera = camera
 
-        # Collect annotations for visible source dice
-        dice_annotations = self._collect_source_dice_annotations()
+        # Assign unique pass indices for pixel-perfect bbox detection
+        assign_pass_indices(self.visible_source_dice)
 
         # Render
-        image_id = f"render_{index:06d}"
-        image_path = self.images_dir / f"{image_id}.png"
         bpy.context.scene.render.filepath = str(image_path)
         bpy.ops.render.render(write_still=True)
+
+        # Compute pixel-perfect bboxes from rendered Object Index pass
+        bbox_map = {}
+        if self._compositor_available:
+            bbox_map = compute_bboxes_from_index_pass(
+                self.visible_source_dice,
+                self.config.image_width,
+                self.config.image_height,
+            )
+
+        # Fallback: use projection-based bboxes for dice not covered by index pass
+        if not bbox_map:
+            camera = bpy.context.scene.camera
+            for die in self.visible_source_dice:
+                bbox = compute_object_bbox_2d(
+                    die, camera, self.config.image_width, self.config.image_height,
+                )
+                if bbox:
+                    bbox_map[die.name] = bbox
+
+        # Collect annotations using pixel-perfect bboxes
+        dice_annotations = self._collect_source_dice_annotations(bbox_map)
 
         # Save annotation
         self._save_annotation(image_id, dice_annotations)
@@ -434,24 +629,26 @@ class BlenderDiceGenerator:
         # Set up rigid body
         setup_rigid_body(new_die, self.config, is_passive=False)
 
-    def _collect_source_dice_annotations(self) -> list[dict]:
-        """Collect annotations for visible source dice."""
+    def _collect_source_dice_annotations(self, bbox_map: dict) -> list[dict]:
+        """Collect annotations for visible source dice using pixel-perfect bboxes.
+
+        Args:
+            bbox_map: Dict mapping die name -> bbox dict from index pass.
+        """
         annotations = []
-        camera = bpy.context.scene.camera
-        width = self.config.image_width
-        height = self.config.image_height
-        min_vis = self.config.min_visibility
 
         for die in self.visible_source_dice:
+            # Only annotate dice that are actually visible in the render
+            bbox = bbox_map.get(die.name)
+            if not bbox:
+                continue  # Not visible in render (occluded, out of frame, etc.)
+
+            if bbox["width"] < 5 or bbox["height"] < 5:
+                continue  # Too small to be useful
+
             # Parse die name to get type and material
             parsed_die = parse_die_name(die.name)
             if not parsed_die:
-                continue
-
-            # Compute 2D bbox with visibility check
-            bbox = compute_object_bbox_2d(die, camera, width, height, min_vis)
-            if not bbox or bbox["width"] < 5 or bbox["height"] < 5:
-                # Skip if not visible enough or bbox too small
                 continue
 
             # Determine value from marker
@@ -522,6 +719,7 @@ class BlenderDiceGenerator:
                 bbox = ann["bbox"]
                 dice_type = ann["dice_type"]
                 value = ann["value"]
+                variant = ann.get("variant")
 
                 color = colors.get(dice_type, "#FFFFFF")
 
@@ -529,8 +727,10 @@ class BlenderDiceGenerator:
                 x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
                 draw.rectangle([x, y, x + w, y + h], outline=color, width=2)
 
-                # Draw label
+                # Build label with variant info
                 label = f"{dice_type}: {value}"
+                if variant:
+                    label += f" ({variant})"
                 draw.text((x, y - 16), label, fill=color, font=font)
 
             # Save annotated image
@@ -653,8 +853,10 @@ class BlenderDiceGenerator:
         """Save metadata about the generation run."""
         metadata = {
             "generated_at": datetime.now().isoformat(),
+            "worker_id": self.config.worker_id,
             "num_images_requested": self.config.num_images,
             "num_images_generated": num_generated,
+            "start_index": self.config.start_index,
             "num_errors": len(errors) if errors else 0,
             "generator_version": GENERATOR_VERSION,
             "config": self.config.to_dict(),
@@ -662,12 +864,13 @@ class BlenderDiceGenerator:
             "spawn_bounds": self.spawn_bounds,
         }
 
-        metadata_path = self.metadata_dir / "generation_metadata.json"
+        suffix = f"_worker{self.config.worker_id}" if self.config.worker_id > 0 else ""
+        metadata_path = self.metadata_dir / f"generation_metadata{suffix}.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
         # Save errors to separate file if any
         if errors:
-            errors_path = self.logs_dir / "errors.json"
+            errors_path = self.logs_dir / f"errors{suffix}.json"
             with open(errors_path, "w") as f:
                 json.dump({"errors": errors}, f, indent=2)

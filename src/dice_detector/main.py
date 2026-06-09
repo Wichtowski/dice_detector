@@ -149,7 +149,7 @@ def run_training() -> int:
     print("Dataset exported to data/yolo_export/")
 
     print("\nTo train the model, run:")
-    print("  yolo detect train data=data/yolo_export/data.yaml model=yolov8n.pt epochs=100")
+    print("  yolo detect train data=data/yolo_export/data.yaml model=yolo11n.pt epochs=150")
     return 0
 
 

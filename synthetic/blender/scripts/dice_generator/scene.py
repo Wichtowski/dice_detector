@@ -123,13 +123,10 @@ def determine_rolled_value(die_obj, config: GeneratorConfig) -> tuple | None:
     return (value, parsed_marker.special_suffix, marker_obj.name)
 
 
-def compute_tray_spawn_bounds(config: GeneratorConfig) -> tuple[float, float, float, float]:
-    """Compute spawn bounds from tray floor object in utils collection"""
-    if config.spawn_area_mode == "manual_bounds" and config.manual_spawn_bounds:
-        return tuple(config.manual_spawn_bounds)
-
+def _find_tray_object(config: GeneratorConfig):
+    """Find the tray floor object in the scene."""
     if not BLENDER_AVAILABLE:
-        return (-0.1, 0.1, -0.1, 0.1)
+        return None
 
     utils_coll = bpy.data.collections.get(config.tray_collection_name)
     if not utils_coll:
@@ -138,7 +135,6 @@ def compute_tray_spawn_bounds(config: GeneratorConfig) -> tuple[float, float, fl
             if utils_coll:
                 break
 
-    # Search for tray object in collection
     tray_obj = None
     if utils_coll:
         print(f"  Searching '{utils_coll.name}' collection for tray floor:")
@@ -149,11 +145,31 @@ def compute_tray_spawn_bounds(config: GeneratorConfig) -> tuple[float, float, fl
                 print(f"      ^ Found tray floor!")
                 break
 
-    # Fallback: try to find tray object globally
     if not tray_obj:
         tray_obj = bpy.data.objects.get("tray")
         if tray_obj:
             print(f"  Found tray object globally: {tray_obj.name}")
+
+    return tray_obj
+
+
+def compute_tray_raw_bounds(config: GeneratorConfig) -> tuple[float, float, float, float] | None:
+    """Compute raw tray bounds (no margin) for camera framing."""
+    tray_obj = _find_tray_object(config)
+    if tray_obj and tray_obj.type == "MESH":
+        return _compute_bounds_from_object(tray_obj, margin=0.0)
+    return None
+
+
+def compute_tray_spawn_bounds(config: GeneratorConfig) -> tuple[float, float, float, float]:
+    """Compute spawn bounds from tray floor object in utils collection"""
+    if config.spawn_area_mode == "manual_bounds" and config.manual_spawn_bounds:
+        return tuple(config.manual_spawn_bounds)
+
+    if not BLENDER_AVAILABLE:
+        return (-0.1, 0.1, -0.1, 0.1)
+
+    tray_obj = _find_tray_object(config)
 
     if tray_obj and tray_obj.type == "MESH":
         return _compute_bounds_from_object(tray_obj, config.spawn_margin)

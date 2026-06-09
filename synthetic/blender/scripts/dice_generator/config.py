@@ -7,15 +7,34 @@ class GeneratorConfig:
     num_images: int = 100
     image_width: int = 1280
     image_height: int = 720
-    min_dice_per_image: int = 1
-    max_dice_per_image: int = 8
+    min_dice_per_image: int = 4
+    max_dice_per_image: int = 25
     render_samples: int = 64
     enable_denoising: bool = True
     random_seed: int | None = None
 
+    # Worker settings (for parallel generation)
+    start_index: int = 0
+    worker_id: int = 0
+    skip_existing: bool = True
+
+    # Resolution variety
+    randomize_resolution: bool = True
+    resolution_base: int = 1080  # base dimension for the longer side
+    resolution_presets: list[str] = field(
+        default_factory=lambda: ["16:9", "9:16", "1:1", "4:3", "3:4"]
+    )
+
+    # D100 solo rule: D100+D10 pair thrown alone
+    d100_solo_mode: bool = True
+    d100_solo_probability: float = 0.15  # chance of a D100 solo image
+
     # Dice collection settings
     dice_collections: list[str] = field(
-        default_factory=lambda: ["1", "2", "3", "4", "8", "9", "10", "11"]
+        default_factory=lambda: [
+            "1", "3", "4", "8", "9", "10", "11",
+            "12", "13", "14", "15", "16", "17", "18", "19",
+        ]
     )
     utils_collection: str = "utils"
     dice_types: list[str] = field(
@@ -24,13 +43,22 @@ class GeneratorConfig:
 
     # Camera settings
     camera_mode: str = "randomized"  # "overhead" | "angled" | "randomized"
-    camera_height_min: float = 0.4
-    camera_height_max: float = 0.8
+    camera_height_min: float = 0.4  # fallback if no tray found
+    camera_height_max: float = 0.8  # fallback if no tray found
     camera_angle_min: float = 60.0  # degrees from horizontal
     camera_angle_max: float = 90.0  # 90 = top-down
     camera_target_location: tuple[float, float, float] = (0.0, 0.0, 0.0)
     camera_focal_length_min: float = 35.0
     camera_focal_length_max: float = 50.0
+    camera_tray_padding: float = 1.1  # multiplier for extra margin around tray (1.0 = exact fit)
+    camera_target_jitter: float = 0.15  # random offset of camera target as fraction of tray size
+
+    # Light augmentation
+    randomize_lighting: bool = True
+    light_energy_min: float = 500.0
+    light_energy_max: float = 3000.0
+    light_color_temperature_min: float = 3500.0  # warm
+    light_color_temperature_max: float = 7000.0  # cool
 
     # Asset scale
     asset_scale_factor: float = 1.0
@@ -51,6 +79,7 @@ class GeneratorConfig:
     settle_velocity_threshold: float = 0.001
     settle_angular_velocity_threshold: float = 0.01
     max_simulation_frames: int = 300
+    physics_time_scale: float = 3.0
     rigid_body_friction: float = 0.5
     rigid_body_bounciness: float = 0.3
     random_initial_velocity: float = 0.5
@@ -65,7 +94,6 @@ class GeneratorConfig:
 
     # Debug/fallback
     use_placeholder_mode: bool = False
-    debug_pause_after_first: bool = True
     debug_interactive_mode: bool = False  # If True, updates viewport after each step
 
     @classmethod

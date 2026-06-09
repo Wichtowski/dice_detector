@@ -1,64 +1,227 @@
 try:
     import bpy
+    import numpy as np
+    from bpy_extras.object_utils import world_to_camera_view
     from mathutils import Vector
     BLENDER_AVAILABLE = True
 except ImportError:
     BLENDER_AVAILABLE = False
 
 
-def compute_object_bbox_2d(obj, camera, width: int, height: int, min_visibility: float = 0.8) -> dict | None:
-    """Compute 2D bounding box for an object projected through camera.
+# ---------------------------------------------------------------------------
+# Compositor / Object Index pass helpers
+# ---------------------------------------------------------------------------
 
-    Uses actual mesh vertices for tight bbox (ignores children/markers).
+def _get_compositor_tree():
+    """Get the compositor node tree, handling Blender version differences."""
+    scene = bpy.context.scene
 
-    Args:
-        obj: Blender object (die mesh).
-        camera: Camera object.
-        width: Render width in pixels.
-        height: Render height in pixels.
-        min_visibility: Minimum fraction of bbox that must be visible (0.0-1.0).
+    # Enable compositing
+    if hasattr(scene, "use_nodes"):
+        scene.use_nodes = True
 
-    Returns:
-        Dict with x, y, width, height, visibility or None if not visible enough.
+    # Standard Blender <=4.x
+    if hasattr(scene, "node_tree") and scene.node_tree is not None:
+        return scene.node_tree
+
+    # Blender 5.x+: try alternative compositor attributes
+    for attr in ("compositor_node_tree", "compositor"):
+        obj = getattr(scene, attr, None)
+        if obj is not None:
+            if hasattr(obj, "nodes"):
+                return obj
+            if hasattr(obj, "node_tree"):
+                return obj.node_tree
+
+    return None
+
+
+def setup_object_index_pass():
+    """Enable the Object Index render pass for pixel-perfect bboxes.
+
+    Returns True if compositor is available for reading the pass.
     """
     if not BLENDER_AVAILABLE:
+        return False
+
+    scene = bpy.context.scene
+    scene.view_layers[0].use_pass_object_index = True
+
+    tree = _get_compositor_tree()
+    if tree is None:
+        print("  Note: Compositor not available, will use projection-based bboxes")
+        return False
+
+    # Ensure a Render Layers node exists
+    has_rl = any(n.type == "R_LAYERS" for n in tree.nodes)
+    if not has_rl:
+        tree.nodes.new("CompositorNodeRLayers")
+
+    return True
+
+
+def assign_pass_indices(dice_list: list):
+    """Assign unique pass_index to each die object (starting at 1)."""
+    for i, die in enumerate(dice_list, start=1):
+        die.pass_index = i
+
+
+def compute_bboxes_from_index_pass(dice_list: list, width: int, height: int) -> dict:
+    """Compute pixel-perfect 2D bounding boxes from the rendered Object Index pass.
+
+    Returns:
+        Dict mapping die object name -> bbox dict, or empty dict on failure.
+    """
+    if not BLENDER_AVAILABLE:
+        return {}
+
+    index_pixels = _read_index_pass(width, height)
+    if index_pixels is None:
+        return {}
+
+    # Build mapping: pass_index -> die name
+    index_to_die = {die.pass_index: die.name for die in dice_list if die.pass_index > 0}
+
+    results = {}
+    for pass_idx, die_name in index_to_die.items():
+        mask = (index_pixels == pass_idx)
+        if not np.any(mask):
+            continue
+
+        rows = np.any(mask, axis=1)
+        cols = np.any(mask, axis=0)
+        y_min, y_max = np.where(rows)[0][[0, -1]]
+        x_min, x_max = np.where(cols)[0][[0, -1]]
+
+        results[die_name] = {
+            "x": int(x_min),
+            "y": int(y_min),
+            "width": int(x_max - x_min + 1),
+            "height": int(y_max - y_min + 1),
+            "area": int(np.count_nonzero(mask)),
+            "visibility": 1.0,
+        }
+
+    return results
+
+
+def _read_index_pass(width: int, height: int):
+    """Read Object Index pass via a Viewer node in the compositor."""
+    tree = _get_compositor_tree()
+    if tree is None:
         return None
 
-    if not obj or not camera:
+    # Find Render Layers node
+    render_node = None
+    for node in tree.nodes:
+        if node.type == "R_LAYERS":
+            render_node = node
+            break
+    if not render_node:
         return None
 
-    # Only use MESH objects for bbox
-    if obj.type != "MESH":
+    # Find IndexOB output
+    index_socket = None
+    for output in render_node.outputs:
+        if output.name == "IndexOB":
+            index_socket = output
+            break
+    if not index_socket:
+        print("  Warning: IndexOB output not found on Render Layers node")
         return None
 
-    # Get evaluated mesh to account for modifiers
+    # Save existing viewer state
+    existing_viewer = None
+    saved_links = []
+    for node in tree.nodes:
+        if node.type == "VIEWER":
+            existing_viewer = node
+            break
+
+    viewer = existing_viewer or tree.nodes.new("CompositorNodeViewer")
+    if existing_viewer:
+        saved_links = [
+            (link.from_socket, link.to_socket)
+            for link in tree.links if link.to_node == viewer
+        ]
+
+    # Disconnect existing viewer inputs, connect IndexOB
+    for link in [l for l in tree.links if l.to_node == viewer]:
+        tree.links.remove(link)
+    tree.links.new(index_socket, viewer.inputs[0])
+
+    # Re-composite (does NOT re-render the scene, just re-processes passes)
+    bpy.ops.render.render(write_still=False)
+
+    # Read the Viewer Node result
+    viewer_image = bpy.data.images.get("Viewer Node")
+    if not viewer_image:
+        _restore_viewer(tree, viewer, existing_viewer, saved_links)
+        return None
+
+    pixels = np.zeros(width * height * 4, dtype=np.float32)
+    viewer_image.pixels.foreach_get(pixels)
+
+    # Index is in the R channel; Blender stores bottom-to-top
+    index_2d = pixels.reshape(height, width, 4)[:, :, 0]
+    index_2d = np.flipud(index_2d)
+    index_2d = np.round(index_2d).astype(np.int32)
+
+    _restore_viewer(tree, viewer, existing_viewer, saved_links)
+    return index_2d
+
+
+def _restore_viewer(tree, viewer, was_existing, saved_links):
+    """Restore compositor viewer node to its original state."""
+    for link in [l for l in tree.links if l.to_node == viewer]:
+        tree.links.remove(link)
+    for from_socket, to_socket in saved_links:
+        tree.links.new(from_socket, to_socket)
+    if not was_existing:
+        tree.nodes.remove(viewer)
+
+
+# ---------------------------------------------------------------------------
+# Projection-based fallback (used when compositor is unavailable)
+# ---------------------------------------------------------------------------
+
+def compute_object_bbox_2d(obj, camera, width: int, height: int,
+                           min_visibility: float = 0.5) -> dict | None:
+    """Compute 2D bounding box by projecting evaluated mesh vertices through camera.
+
+    Uses only actual mesh vertices (not bound_box) for a tight fit.
+    Filters out dice that are mostly outside the frame.
+
+    Args:
+        min_visibility: Minimum fraction of the full bbox that must be within the
+                        image frame (0.0-1.0). Default 0.5 = at least half visible.
+    """
+    if not BLENDER_AVAILABLE or not obj or not camera or obj.type != "MESH":
+        return None
+
+    scene = bpy.context.scene
     depsgraph = bpy.context.evaluated_depsgraph_get()
     eval_obj = obj.evaluated_get(depsgraph)
-    mesh = eval_obj.to_mesh()
 
-    if not mesh or len(mesh.vertices) == 0:
+    # Use only mesh vertices for tight bbox
+    points = []
+    try:
+        mesh = eval_obj.to_mesh()
+        if mesh and len(mesh.vertices) > 0:
+            points = [eval_obj.matrix_world @ v.co for v in mesh.vertices]
         eval_obj.to_mesh_clear()
+    except Exception:
+        pass
+
+    if not points:
         return None
 
-    # Get world-space vertex positions
-    world_verts = [obj.matrix_world @ v.co for v in mesh.vertices]
-    eval_obj.to_mesh_clear()
-
-    # Project vertices to 2D
-    camera_matrix = camera.matrix_world.normalized().inverted()
-    projection_matrix = camera.calc_matrix_camera(depsgraph, x=width, y=height)
-
+    # Project to 2D
     coords_2d = []
-    for vert in world_verts:
-        point_camera = camera_matrix @ vert
-        point_clip = projection_matrix @ point_camera.to_4d()
-
-        if point_clip.w <= 0:
-            continue  # Behind camera
-
-        x = ((point_clip.x / point_clip.w) + 1) * width / 2
-        y = (1 - (point_clip.y / point_clip.w)) * height / 2
-        coords_2d.append((x, y))
+    for pt in points:
+        co = world_to_camera_view(scene, camera, pt)
+        if co.z > 0:
+            coords_2d.append((co.x * width, (1.0 - co.y) * height))
 
     if not coords_2d:
         return None
@@ -66,56 +229,35 @@ def compute_object_bbox_2d(obj, camera, width: int, height: int, min_visibility:
     xs = [c[0] for c in coords_2d]
     ys = [c[1] for c in coords_2d]
 
-    # Full bbox before clipping
-    full_x_min = min(xs)
-    full_y_min = min(ys)
-    full_x_max = max(xs)
-    full_y_max = max(ys)
-    full_width = full_x_max - full_x_min
-    full_height = full_y_max - full_y_min
-    full_area = full_width * full_height
+    # Full (unclipped) bbox
+    full_x_min, full_x_max = min(xs), max(xs)
+    full_y_min, full_y_max = min(ys), max(ys)
+    full_w = full_x_max - full_x_min
+    full_h = full_y_max - full_y_min
+    full_area = full_w * full_h
 
     if full_area <= 0:
         return None
 
-    # Clipped bbox
+    # Clipped bbox (within image bounds)
     x_min = max(0, int(full_x_min))
     y_min = max(0, int(full_y_min))
     x_max = min(width, int(full_x_max))
     y_max = min(height, int(full_y_max))
 
-    bbox_width = max(1, x_max - x_min)
-    bbox_height = max(1, y_max - y_min)
-    clipped_area = bbox_width * bbox_height
+    bbox_w = max(1, x_max - x_min)
+    bbox_h = max(1, y_max - y_min)
+    clipped_area = bbox_w * bbox_h
 
-    # Calculate visibility percentage
-    visibility = clipped_area / full_area if full_area > 0 else 0
-
-    # Check minimum visibility threshold
+    # Check visibility: what fraction of the bbox is within the image
+    visibility = clipped_area / full_area
     if visibility < min_visibility:
         return None
 
     return {
         "x": x_min,
         "y": y_min,
-        "width": bbox_width,
-        "height": bbox_height,
+        "width": bbox_w,
+        "height": bbox_h,
         "visibility": round(visibility, 3),
     }
-
-
-def is_object_visible(obj, camera, width: int, height: int, min_visibility: float = 0.8) -> bool:
-    """Check if object is sufficiently visible in camera view.
-
-    Args:
-        obj: Blender object.
-        camera: Camera object.
-        width: Render width.
-        height: Render height.
-        min_visibility: Minimum visibility fraction required.
-
-    Returns:
-        True if object meets visibility threshold.
-    """
-    bbox = compute_object_bbox_2d(obj, camera, width, height, min_visibility)
-    return bbox is not None

@@ -1,38 +1,35 @@
 """Training script for dice detection model."""
 
 import argparse
+import json
 import os
+from pathlib import Path
 
 from dice_detector.training.dataset import DatasetManager
+
+ID_TO_NAME = {0: "D4", 1: "D6", 2: "D8", 3: "D10", 4: "D12", 5: "D20", 6: "D100"}
 
 
 def train_yolo(
     data_yaml: str,
-    model: str = "yolov8n.pt",
-    epochs: int = 100,
+    model: str = "yolo11n.pt",
+    epochs: int = 150,
     imgsz: int = 640,
     batch: int = 16,
     project: str = "runs/detect",
     name: str = "dice_detector",
+    resume: bool = False,
 ):
-    """Train YOLOv8 model for dice detection.
-
-    Args:
-        data_yaml: Path to data.yaml file.
-        model: Base model to use.
-        epochs: Number of training epochs.
-        imgsz: Image size.
-        batch: Batch size.
-        project: Project directory.
-        name: Run name.
-    """
     try:
         from ultralytics import YOLO
 
-        # Load model
-        yolo = YOLO(model)
+        checkpoint = Path(project) / name / "weights" / "last.pt"
+        if resume and checkpoint.exists():
+            print(f"Resuming from {checkpoint}")
+            yolo = YOLO(str(checkpoint))
+        else:
+            yolo = YOLO(model)
 
-        # Train
         results = yolo.train(
             data=data_yaml,
             epochs=epochs,
@@ -40,13 +37,26 @@ def train_yolo(
             batch=batch,
             project=project,
             name=name,
-            patience=20,
+            exist_ok=True,
+            resume=resume and checkpoint.exists(),
+            patience=25,
             save=True,
+            save_period=10,
             plots=True,
             verbose=True,
+            hsv_h=0.015,
+            hsv_s=0.4,
+            hsv_v=0.3,
+            degrees=15.0,
+            translate=0.1,
+            scale=0.3,
+            flipud=0.5,
+            fliplr=0.5,
+            mosaic=1.0,
+            mixup=0.1,
         )
 
-        print("\nTraining complete!")
+        print(f"\nTraining complete!")
         print(f"Best model saved to: {results.save_dir}/weights/best.pt")
 
         return results
@@ -61,23 +71,45 @@ def evaluate_model(
     model_path: str,
     data_yaml: str,
     split: str = "test",
+    output_dir: str | None = None,
 ):
-    """Evaluate trained model.
-
-    Args:
-        model_path: Path to trained model.
-        data_yaml: Path to data.yaml file.
-        split: Dataset split to evaluate on.
-    """
     try:
         from ultralytics import YOLO
 
         model = YOLO(model_path)
-        results = model.val(data=data_yaml, split=split)
+        results = model.val(data=data_yaml, split=split, plots=True)
 
-        print("\nEvaluation Results:")
-        print(f"mAP50: {results.box.map50:.4f}")
-        print(f"mAP50-95: {results.box.map:.4f}")
+        print(f"\nTest Results:")
+        print(f"  mAP50:     {results.box.map50:.4f}")
+        print(f"  mAP50-95:  {results.box.map:.4f}")
+        print(f"  Precision: {results.box.mp:.4f}")
+        print(f"  Recall:    {results.box.mr:.4f}")
+
+        per_class = {}
+        for class_id, ap in enumerate(results.box.maps):
+            class_name = ID_TO_NAME.get(class_id, f"class_{class_id}")
+            per_class[class_name] = float(ap)
+
+        print(f"\nPer-class mAP50-95:")
+        for name, ap in per_class.items():
+            print(f"  {name}: {ap:.4f}")
+
+        worst = min(per_class, key=per_class.get)
+        print(f"\nWeakest class: {worst} ({per_class[worst]:.4f})")
+
+        if output_dir:
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            with open(out / "per_class_test_ap.json", "w") as f:
+                json.dump(per_class, f, indent=2)
+            with open(out / "eval_summary.json", "w") as f:
+                json.dump({
+                    "map50": float(results.box.map50),
+                    "map50_95": float(results.box.map),
+                    "precision": float(results.box.mp),
+                    "recall": float(results.box.mr),
+                    "per_class_ap": per_class,
+                }, f, indent=2)
 
         return results
 
@@ -153,7 +185,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="yolov8n.pt",
+        default="yolo11n.pt",
         help="Base model or trained model path",
     )
     parser.add_argument(
@@ -180,6 +212,17 @@ def main():
         default="onnx",
         help="Export format",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume training from last checkpoint",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output directory for evaluation artifacts",
+    )
 
     args = parser.parse_args()
 
@@ -198,6 +241,7 @@ def main():
             epochs=args.epochs,
             batch=args.batch,
             imgsz=args.imgsz,
+            resume=args.resume,
         )
 
     elif args.action == "evaluate":
@@ -205,7 +249,7 @@ def main():
             print(f"Model not found: {args.model}")
             return
 
-        evaluate_model(args.model, args.data)
+        evaluate_model(args.model, args.data, output_dir=args.output)
 
     elif args.action == "export":
         if not os.path.exists(args.model):

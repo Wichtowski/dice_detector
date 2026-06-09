@@ -26,8 +26,9 @@ cd dice_detector
 # Sync dependencies
 uv sync
 
-# Install dev dependencies
-uv sync --dev
+# Install deps for amd or nvidia
+uv sync --amd
+uv sync --nvidia
 ```
 
 ## Usage
@@ -35,13 +36,6 @@ uv sync --dev
 ### Start the API Server
 
 ```bash
-# Start the API server (default mode)
-uv run dice-detector
-
-# Or with explicit mode
-uv run dice-detector --mode api --host 127.0.0.1 --port 8765
-
-# With auto-reload for development
 uv run dice-detector --mode api --reload
 ```
 
@@ -53,9 +47,7 @@ The API will be available at:
 ### Run Tests
 
 ```bash
-uv run pytest
-uv run pytest -v  # verbose
-uv run pytest --cov  # with coverage
+uv run pytest --cov
 ```
 
 ### Development Tools
@@ -144,6 +136,10 @@ Edit `config/settings.yaml` to configure:
 1. Install the companion Foundry module (see `foundry_module/`)
 2. Enable WebSocket connection in Foundry settings
 3. Configure connection in dice detector settings
+
+## Acknowledgments
+
+Huge shoutout to [dianaavlis2002](https://www.artstation.com/dianasilva8) on Sketchfab/Artstation for the amazing RPG dice set used in this project's Blender scenes for synthetic data generation!
 
 ## License
 

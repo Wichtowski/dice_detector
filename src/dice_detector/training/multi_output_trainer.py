@@ -36,7 +36,7 @@ class MultiOutputTrainer:
     def train_detection_model(
         self,
         data_yaml: str,
-        base_model: str = "yolo26n.pt",
+        base_model: str = "yolo11n.pt",
         epochs: int = 100,
         imgsz: int = 640,
         batch: int = 16,

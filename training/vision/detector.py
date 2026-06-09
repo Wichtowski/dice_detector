@@ -18,35 +18,23 @@ class DiceDetector:
         3: DiceType.D10,
         4: DiceType.D12,
         5: DiceType.D20,
-        6: DiceType.D100_TENS,  # Percentile die
+        6: DiceType.D100_TENS,
     }
 
     def __init__(self, model_path: Optional[str] = None, confidence_threshold: float = 0.5):
-        """Initialize dice detector.
-
-        Args:
-            model_path: Path to custom YOLO model. If None, uses default.
-            confidence_threshold: Minimum confidence for detections.
-        """
         self.confidence_threshold = confidence_threshold
         self.model = None
         self.model_path = model_path
         self._use_fallback = False
 
     def load_model(self) -> bool:
-        """Load the YOLO model.
-
-        Returns:
-            True if model loaded successfully.
-        """
         try:
             from ultralytics import YOLO
 
             if self.model_path and os.path.exists(self.model_path):
                 self.model = YOLO(self.model_path)
             else:
-                # Use pretrained YOLOv8 as base - will need fine-tuning for dice
-                self.model = YOLO("yolov8n.pt")
+                self.model = YOLO("yolo11n.pt")
                 self._use_fallback = True
             return True
         except Exception as e:

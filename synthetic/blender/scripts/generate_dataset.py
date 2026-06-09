@@ -12,11 +12,11 @@ import json
 import sys
 from pathlib import Path
 
-from dice_generator import BlenderDiceGenerator, GeneratorConfig
-
 script_dir = Path(__file__).parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
+
+from dice_generator import BlenderDiceGenerator, GeneratorConfig
 
 
 
@@ -28,6 +28,9 @@ def parse_args():
     parser.add_argument("--output", type=str, help="Output directory")
     parser.add_argument("--num-images", type=int, help="Number of images to generate")
     parser.add_argument("--seed", type=int, help="Random seed")
+    parser.add_argument("--start-index", type=int, default=0, help="Starting image index (for parallel workers)")
+    parser.add_argument("--worker-id", type=int, default=0, help="Worker ID (for parallel generation)")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing images (default: skip)")
 
     return parser.parse_args(argv)
 
@@ -50,6 +53,12 @@ def main():
         config["num_images"] = args.num_images
     if args.seed:
         config["random_seed"] = args.seed
+    if args.start_index:
+        config["start_index"] = args.start_index
+    if args.worker_id:
+        config["worker_id"] = args.worker_id
+    if args.overwrite:
+        config["skip_existing"] = False
 
     gen_config = GeneratorConfig.from_dict(config)
 
