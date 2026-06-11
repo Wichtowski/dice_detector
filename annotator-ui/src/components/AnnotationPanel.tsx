@@ -4,9 +4,10 @@ interface Props {
   annotation: Annotation
   config: Config
   onUpdate: (updates: Partial<Annotation>) => void
+  readOnly?: boolean
 }
  
-export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
+export function AnnotationPanel({ annotation, config, onUpdate, readOnly }: Props) {
   return (
     <div className="p-4 border-t border-gray-700 space-y-3">
       <h3 className="font-semibold text-sm text-gray-400">Selected Annotation</h3>
@@ -16,7 +17,8 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
         <select
           value={annotation.dice_type}
           onChange={(e) => onUpdate({ dice_type: e.target.value })}
-          className="w-full bg-gray-700 rounded p-2 text-sm"
+          className="w-full bg-gray-700 rounded p-2 text-sm disabled:opacity-60"
+          disabled={readOnly}
         >
           {config.dice_types.map((t) => (
             <option key={t} value={t}>{t}</option>
@@ -30,9 +32,10 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
           type="number"
           value={annotation.value ?? ''}
           onChange={(e) => onUpdate({ value: e.target.value ? parseInt(e.target.value) : null })}
-          className="w-full bg-gray-700 rounded p-2 text-sm"
+          className="w-full bg-gray-700 rounded p-2 text-sm disabled:opacity-60"
           min={0}
           max={100}
+          disabled={readOnly}
         />
       </div>
  
@@ -42,10 +45,11 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
           type="number"
           value={annotation.orientation_degrees ?? ''}
           onChange={(e) => onUpdate({ orientation_degrees: e.target.value ? parseFloat(e.target.value) : null })}
-          className="w-full bg-gray-700 rounded p-2 text-sm"
+          className="w-full bg-gray-700 rounded p-2 text-sm disabled:opacity-60"
           min={0}
           max={359}
           step={1}
+          disabled={readOnly}
         />
       </div>
  
@@ -55,6 +59,7 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
           checked={annotation.ambiguous}
           onChange={(e) => onUpdate({ ambiguous: e.target.checked })}
           className="rounded"
+          disabled={readOnly}
         />
         <span>Ambiguous</span>
       </label>
@@ -65,6 +70,7 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
           checked={annotation.has_6_9_marker ?? false}
           onChange={(e) => onUpdate({ has_6_9_marker: e.target.checked })}
           className="rounded"
+          disabled={readOnly}
         />
         <span>Has 6/9 marker</span>
       </label>
@@ -75,7 +81,8 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
           <select
             value={annotation.d4_style ?? ''}
             onChange={(e) => onUpdate({ d4_style: e.target.value || null })}
-            className="w-full bg-gray-700 rounded p-2 text-sm"
+            className="w-full bg-gray-700 rounded p-2 text-sm disabled:opacity-60"
+            disabled={readOnly}
           >
             <option value="">Unknown</option>
             {config.d4_styles.map((s) => (
@@ -91,7 +98,8 @@ export function AnnotationPanel({ annotation, config, onUpdate }: Props) {
           <select
             value={annotation.special_value ?? ''}
             onChange={(e) => onUpdate({ special_value: e.target.value || null })}
-            className="w-full bg-gray-700 rounded p-2 text-sm"
+            className="w-full bg-gray-700 rounded p-2 text-sm disabled:opacity-60"
+            disabled={readOnly}
           >
             <option value="">None</option>
             {config.special_values.map((s) => (

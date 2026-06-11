@@ -175,6 +175,11 @@ class RollSession(BaseModel):
             required_dice.append(
                 RequiredDiceGroup(dice_type=DiceType.D100, required_count=1)
             )
+            # Add 1 of every other dice type for D100 rolls
+            for dt in (DiceType.D4, DiceType.D6, DiceType.D8, DiceType.D12, DiceType.D20):
+                required_dice.append(
+                    RequiredDiceGroup(dice_type=dt, required_count=1)
+                )
             formula = formula.replace("d100", "").replace("1", "", 1)
 
         dice_pattern = r"(\d*)d(\d+)"
@@ -299,7 +304,15 @@ class ExpectedRoll(BaseModel):
         is_d100 = "d100" in formula_lower
 
         if is_d100:
-            expected_dice = [(DiceType.D100_TENS, 1), (DiceType.D100_ONES, 1)]
+            expected_dice = [
+                (DiceType.D100_TENS, 1),
+                (DiceType.D100_ONES, 1),
+                (DiceType.D4, 1),
+                (DiceType.D6, 1),
+                (DiceType.D8, 1),
+                (DiceType.D12, 1),
+                (DiceType.D20, 1),
+            ]
         else:
             pattern = r"(\d*)d(\d+)"
             matches = re.findall(pattern, formula_lower)

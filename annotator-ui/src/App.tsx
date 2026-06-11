@@ -18,10 +18,22 @@ export default function App() {
   const [config, setConfig] = useState<Config | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalImages, setTotalImages] = useState(0)
+  const [readOnly, setReadOnly] = useState(false)
+
+  const loadPage = useCallback(async (p: number) => {
+    const data = await fetchImages(p)
+    setImages(data.images)
+    setPage(data.page)
+    setTotalPages(data.total_pages)
+    setTotalImages(data.total)
+  }, [])
 
   useEffect(() => {
     fetchConfig().then(setConfig)
-    fetchImages().then(setImages)
+    loadPage(1)
   }, [])
 
   const loadImage = useCallback(async (imageId: string) => {
@@ -31,6 +43,7 @@ export default function App() {
       info.annotations.map((a) => ({ ...a, id: generateId() }))
     )
     setSelectedId(null)
+    setReadOnly(info.read_only ?? false)
   }, [])
 
   useEffect(() => {
@@ -43,20 +56,50 @@ export default function App() {
     ? images.findIndex((img) => img.id === currentImage.id)
     : -1
 
-  const goToPrev = useCallback(() => {
+  const goToPrev = useCallback(async () => {
     if (currentIndex > 0) {
       loadImage(images[currentIndex - 1].id)
+    } else if (page > 1) {
+      const data = await fetchImages(page - 1)
+      setImages(data.images)
+      setPage(data.page)
+      setTotalPages(data.total_pages)
+      setTotalImages(data.total)
+      if (data.images.length > 0) {
+        loadImage(data.images[data.images.length - 1].id)
+      }
     }
-  }, [currentIndex, images, loadImage])
+  }, [currentIndex, images, loadImage, page])
 
-  const goToNext = useCallback(() => {
+  const goToNext = useCallback(async () => {
     if (currentIndex < images.length - 1) {
       loadImage(images[currentIndex + 1].id)
+    } else if (page < totalPages) {
+      const data = await fetchImages(page + 1)
+      setImages(data.images)
+      setPage(data.page)
+      setTotalPages(data.total_pages)
+      setTotalImages(data.total)
+      if (data.images.length > 0) {
+        loadImage(data.images[0].id)
+      }
     }
-  }, [currentIndex, images, loadImage])
+  }, [currentIndex, images, loadImage, page, totalPages])
+
+  const handlePageChange = useCallback(async (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages) return
+    const data = await fetchImages(newPage)
+    setImages(data.images)
+    setPage(data.page)
+    setTotalPages(data.total_pages)
+    setTotalImages(data.total)
+    if (data.images.length > 0) {
+      loadImage(data.images[0].id)
+    }
+  }, [totalPages, loadImage])
 
   const handleSave = useCallback(async () => {
-    if (!currentImage) return
+    if (!currentImage || readOnly) return
     setSaving(true)
     try {
       const toSave = annotations.map(({ id: _, ...rest }) => rest)
@@ -72,7 +115,7 @@ export default function App() {
       setMessage('Save failed!')
     }
     setSaving(false)
-  }, [currentImage, annotations])
+  }, [currentImage, annotations, readOnly])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -82,7 +125,7 @@ export default function App() {
       }
       if (e.key === 'ArrowLeft') goToPrev()
       if (e.key === 'ArrowRight') goToNext()
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && !readOnly) {
         setAnnotations((prev) => prev.filter((a) => a.id !== selectedId))
         setSelectedId(null)
       }
@@ -134,6 +177,11 @@ export default function App() {
           onSelect={loadImage}
           onPrev={goToPrev}
           onNext={goToNext}
+          page={page}
+          totalPages={totalPages}
+          total={totalImages}
+          onPageChange={handlePageChange}
+          readOnly={readOnly}
         />
 
         <div className="flex-1 overflow-y-auto p-4 border-t border-gray-700">
@@ -142,6 +190,7 @@ export default function App() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onDelete={handleDeleteAnnotation}
+            readOnly={readOnly}
           />
         </div>
 
@@ -150,17 +199,20 @@ export default function App() {
             annotation={selectedAnnotation}
             config={config}
             onUpdate={(updates) => handleUpdateAnnotation(selectedId!, updates)}
+            readOnly={readOnly}
           />
         )}
 
         <div className="p-4 border-t border-gray-700">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 rounded p-2 font-semibold"
-          >
-            {saving ? 'Saving...' : 'Save (Ctrl+S)'}
-          </button>
+          {!readOnly && (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 rounded p-2 font-semibold"
+            >
+              {saving ? 'Saving...' : 'Save (Ctrl+S)'}
+            </button>
+          )}
           {message && (
             <p className="text-center text-sm text-green-400 mt-2">{message}</p>
           )}
@@ -178,6 +230,7 @@ export default function App() {
             onSelect={setSelectedId}
             onAdd={handleAddAnnotation}
             onUpdate={handleUpdateAnnotation}
+            readOnly={readOnly}
           />
         )}
       </div>

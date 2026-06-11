@@ -5,9 +5,10 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   onDelete: (id: string) => void
+  readOnly?: boolean
 }
  
-export function BBoxList({ annotations, selectedId, onSelect, onDelete }: Props) {
+export function BBoxList({ annotations, selectedId, onSelect, onDelete, readOnly }: Props) {
   if (annotations.length === 0) {
     return (
       <div className="text-gray-500 text-sm">
@@ -45,6 +46,7 @@ export function BBoxList({ annotations, selectedId, onSelect, onDelete }: Props)
               onDelete(ann.id)
             }}
             className="text-red-400 text-xs hover:text-red-300 mt-1"
+            hidden={readOnly}
           >
             Delete
           </button>

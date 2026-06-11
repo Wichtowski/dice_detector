@@ -261,7 +261,15 @@ class ExpectedRoll:
         is_d100 = "d100" in formula
 
         if is_d100:
-            expected_dice = [(DiceType.D100_TENS, 1), (DiceType.D100_ONES, 1)]
+            expected_dice = [
+                (DiceType.D100_TENS, 1),
+                (DiceType.D100_ONES, 1),
+                (DiceType.D4, 1),
+                (DiceType.D6, 1),
+                (DiceType.D8, 1),
+                (DiceType.D12, 1),
+                (DiceType.D20, 1),
+            ]
         else:
             # Parse patterns like "2d6", "1d20", "4d8"
             pattern = r"(\d*)d(\d+)"

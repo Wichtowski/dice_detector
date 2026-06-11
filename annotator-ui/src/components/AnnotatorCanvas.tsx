@@ -13,6 +13,7 @@ interface Props {
   onSelect: (id: string | null) => void
   onAdd: (bbox: BBox) => void
   onUpdate: (id: string, updates: Partial<Annotation>) => void
+  readOnly?: boolean
 }
  
 export function AnnotatorCanvas({
@@ -24,6 +25,7 @@ export function AnnotatorCanvas({
   onSelect,
   onAdd,
   onUpdate,
+  readOnly,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 800, height: 600 })
@@ -73,6 +75,7 @@ export function AnnotatorCanvas({
   })
  
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    if (readOnly) return
     if (e.target !== e.target.getStage()?.findOne('Image')) {
       return
     }
@@ -170,7 +173,7 @@ export function AnnotatorCanvas({
               stroke={ann.id === selectedId ? '#3b82f6' : '#22c55e'}
               strokeWidth={2}
               fill={ann.id === selectedId ? 'rgba(59,130,246,0.2)' : 'rgba(34,197,94,0.1)'}
-              draggable
+              draggable={!readOnly}
               onClick={(e) => handleRectClick(ann.id, e)}
               onTap={(e) => handleRectClick(ann.id, e)}
               onDragEnd={(e) => handleDragEnd(ann.id, e)}
@@ -190,7 +193,7 @@ export function AnnotatorCanvas({
             />
           )}
  
-          {selectedId && (
+          {selectedId && !readOnly && (
             <Transformer
               ref={transformerRef}
               boundBoxFunc={(oldBox, newBox) => {

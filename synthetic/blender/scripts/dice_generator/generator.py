@@ -375,7 +375,7 @@ class BlenderDiceGenerator:
         return visible_dice
 
     def _pick_d100_solo_dice(self) -> list:
-        """Pick a random D100 + its matching D10 for a solo roll."""
+        """Pick a random D100 + its matching D10 + one of every other dice type."""
         d100_dice = [
             d for d in self.available_dice
             if parse_die_name(d.name) and parse_die_name(d.name).dice_type == "D100"
@@ -386,6 +386,7 @@ class BlenderDiceGenerator:
         d100 = random.choice(d100_dice)
         d100_parsed = parse_die_name(d100.name)
         result = [d100]
+        used_ids = {id(d100)}
 
         # Find matching D10
         for die in self.available_dice:
@@ -393,8 +394,23 @@ class BlenderDiceGenerator:
             if (parsed and parsed.dice_type == "D10"
                     and parsed.material_number == d100_parsed.material_number):
                 result.append(die)
+                used_ids.add(id(die))
                 print(f"  D100 solo roll: {d100.name} + {die.name}")
                 break
+
+        # Add one of every other dice type
+        for dtype in ("D4", "D6", "D8", "D12", "D20"):
+            candidates = [
+                d for d in self.available_dice
+                if id(d) not in used_ids
+                and parse_die_name(d.name)
+                and parse_die_name(d.name).dice_type == dtype
+            ]
+            if candidates:
+                picked = random.choice(candidates)
+                result.append(picked)
+                used_ids.add(id(picked))
+                print(f"  D100 roll: added {picked.name} ({dtype})")
 
         return result
 
@@ -467,17 +483,17 @@ class BlenderDiceGenerator:
             return
 
         num_images = self.config.num_images
-        self.logger.info(f"Generating {num_images} images...")
+        indices = self.config.indices or list(range(self.config.start_index, self.config.start_index + num_images))
+        self.logger.info(f"Generating {len(indices)} images...")
 
         successful = 0
         errors = []
-        for i in range(num_images):
-            global_index = self.config.start_index + i
+        for i, global_index in enumerate(indices):
             try:
                 self._generate_single_image(global_index)
                 successful += 1
                 if (i + 1) % 10 == 0:
-                    self.logger.info(f"[Worker {self.config.worker_id}] Progress: {i + 1}/{num_images} images ({successful} successful)")
+                    self.logger.info(f"[Worker {self.config.worker_id}] Progress: {i + 1}/{len(indices)} images ({successful} successful)")
 
             except Exception as e:
                 error_msg = f"[Worker {self.config.worker_id}] Error generating image {global_index}: {e}\n{traceback.format_exc()}"
@@ -485,12 +501,13 @@ class BlenderDiceGenerator:
                 errors.append({"image_index": global_index, "error": str(e), "traceback": traceback.format_exc()})
 
         self._save_generation_metadata(successful, errors)
-        self.logger.info(f"[Worker {self.config.worker_id}] Dataset generation complete: {successful}/{num_images} images")
+        self.logger.info(f"[Worker {self.config.worker_id}] Dataset generation complete: {successful}/{len(indices)} images")
 
     def _ensure_dirs(self):
         """Create output directories."""
         self.images_dir.mkdir(parents=True, exist_ok=True)
-        self.images_annotated_dir.mkdir(parents=True, exist_ok=True)
+        if self.config.create_annotated_images:
+            self.images_annotated_dir.mkdir(parents=True, exist_ok=True)
         self.annotations_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -568,8 +585,9 @@ class BlenderDiceGenerator:
         # Save annotation
         self._save_annotation(image_id, dice_annotations)
 
-        # Create annotated image with bboxes
-        self._create_annotated_image(image_path, image_id, dice_annotations)
+        # Create annotated image with bboxes (only if enabled)
+        if self.config.create_annotated_images:
+            self._create_annotated_image(image_path, image_id, dice_annotations)
 
     def _update_viewport(self, message: str = ""):
         """Update Blender viewport in interactive mode."""

@@ -92,6 +92,10 @@ class GeneratorConfig:
     # Annotation settings
     min_visibility: float = 0.8  # Minimum fraction of dice visible to include in annotations
 
+    # Output options
+    create_annotated_images: bool = False  # Create images with bboxes drawn
+    indices: list[int] | None = None  # Specific image indices to generate (fills gaps)
+
     # Debug/fallback
     use_placeholder_mode: bool = False
     debug_interactive_mode: bool = False  # If True, updates viewport after each step

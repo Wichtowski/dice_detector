@@ -31,6 +31,10 @@ def parse_args():
     parser.add_argument("--start-index", type=int, default=0, help="Starting image index (for parallel workers)")
     parser.add_argument("--worker-id", type=int, default=0, help="Worker ID (for parallel generation)")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing images (default: skip)")
+    parser.add_argument("--add-annotated-images", action="store_true",
+                        help="Create annotated images with bounding boxes drawn")
+    parser.add_argument("--indices", type=str, default=None,
+                        help="Comma-separated list of specific image indices to generate")
 
     return parser.parse_args(argv)
 
@@ -49,16 +53,20 @@ def main():
 
     if args.output:
         config["output_dir"] = args.output
-    if args.num_images:
+    if args.num_images is not None:
         config["num_images"] = args.num_images
-    if args.seed:
+    if args.seed is not None:
         config["random_seed"] = args.seed
-    if args.start_index:
+    if args.start_index is not None:
         config["start_index"] = args.start_index
-    if args.worker_id:
+    if args.worker_id is not None:
         config["worker_id"] = args.worker_id
     if args.overwrite:
         config["skip_existing"] = False
+    if args.add_annotated_images:
+        config["create_annotated_images"] = True
+    if args.indices:
+        config["indices"] = [int(i) for i in args.indices.split(",")]
 
     gen_config = GeneratorConfig.from_dict(config)
 

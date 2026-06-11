@@ -25,17 +25,22 @@ export interface ImageInfo {
   height: number
   url: string
   annotations: Omit<Annotation, 'id'>[]
+  read_only: boolean
+  source: string
 }
- 
+
 export interface ImageListItem {
   id: string
   name: string
   annotated: boolean
+  read_only: boolean
+  source: string
 }
- 
-export interface Config {
-  dice_types: string[]
-  ambiguity_reasons: string[]
-  special_values: string[]
-  d4_styles: string[]
+
+export interface PaginatedImages {
+  images: ImageListItem[]
+  page: number
+  per_page: number
+  total: number
+  total_pages: number
 }

@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -23,6 +24,39 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BLEND_FILE = PROJECT_ROOT / "blender" / "dices.blend"
 DEFAULT_CONFIG = PROJECT_ROOT / "synthetic" / "blender" / "configs" / "default_blender_generation.json"
 GENERATOR_SCRIPT = PROJECT_ROOT / "synthetic" / "blender" / "scripts" / "generate_dataset.py"
+
+
+def _find_missing_indices(output_dir: Path, num_needed: int) -> list[int]:
+    """Scan output directory and return missing image indices (gaps), then append new ones if needed."""
+    images_dir = output_dir / "images"
+    annotations_dir = output_dir / "annotations"
+
+    existing = set()
+    if images_dir.exists():
+        pattern = re.compile(r"^render_(\d+)\.png$")
+        for f in images_dir.iterdir():
+            m = pattern.match(f.name)
+            if m:
+                # Only count as existing if both image and annotation are present
+                idx = int(m.group(1))
+                ann = annotations_dir / f"render_{idx:06d}.json"
+                if ann.exists():
+                    existing.add(idx)
+
+    # Find gaps in [0, max_index]
+    max_index = max(existing) if existing else -1
+    missing = []
+    for i in range(max_index + 1):
+        if i not in existing:
+            missing.append(i)
+
+    # If we still need more, continue after max_index
+    next_new = max_index + 1
+    while len(missing) < num_needed:
+        missing.append(next_new)
+        next_new += 1
+
+    return missing[:num_needed]
 
 
 def find_blender() -> str | None:
@@ -75,6 +109,8 @@ Examples:
     parser.add_argument("--blender-path", type=str, help="Path to Blender executable")
     parser.add_argument("--no-background", action="store_true",
                         help="Run Blender with GUI (useful for debugging)")
+    parser.add_argument("--add-annotated-images", action="store_true",
+                        help="Create annotated images with bounding boxes drawn")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the command without executing it")
 
@@ -107,10 +143,26 @@ Examples:
 
     num_images = args.num_images or 100
 
+    # Compute indices to generate: fill gaps first, then append new ones
+    if args.start_from == 0 and not args.overwrite:
+        output_dir = Path(args.output).resolve() if args.output else PROJECT_ROOT / "data" / "generated" / "blender"
+        indices = _find_missing_indices(output_dir, num_images)
+        # Count how many are gap-fills vs new appends
+        max_existing = max(indices) - num_images + len(indices) if indices else -1
+        gaps = [i for i in indices if i <= max_existing]
+        if gaps:
+            print(f"Found {len(gaps)} gaps to fill, plus {num_images - len(gaps)} new images")
+        else:
+            start = indices[0] if indices else 0
+            print(f"No gaps found, generating from index {start}")
+        args._indices = indices
+    else:
+        args._indices = list(range(args.start_from, args.start_from + num_images))
+
     if args.workers > 1:
         _run_parallel(args, blender, blend_file, num_images)
     else:
-        cmd = _build_cmd(blender, blend_file, args, num_images, start_index=args.start_from, worker_id=0)
+        cmd = _build_cmd(blender, blend_file, args, num_images, indices=args._indices, worker_id=0)
         _print_cmd(cmd)
         if args.dry_run:
             return
@@ -127,7 +179,7 @@ def _build_cmd(
     blend_file: Path,
     args: argparse.Namespace,
     num_images: int,
-    start_index: int = 0,
+    indices: list[int] | None = None,
     worker_id: int = 0,
 ) -> list[str]:
     """Build the Blender command for a single worker."""
@@ -153,11 +205,16 @@ def _build_cmd(
     if args.output:
         cmd.extend(["--output", str(Path(args.output).resolve())])
 
-    cmd.extend(["--start-index", str(start_index)])
+    if indices is not None:
+        cmd.extend(["--indices", ",".join(str(i) for i in indices)])
+
     cmd.extend(["--worker-id", str(worker_id)])
 
     if args.overwrite:
         cmd.append("--overwrite")
+
+    if args.add_annotated_images:
+        cmd.append("--add-annotated-images")
 
     return cmd
 
@@ -170,26 +227,25 @@ def _print_cmd(cmd: list[str]):
 def _run_parallel(args: argparse.Namespace, blender: str, blend_file: Path, num_images: int):
     """Run multiple Blender workers in parallel."""
     workers = args.workers
-    images_per_worker = num_images // workers
-    remainder = num_images % workers
 
     print(f"Parallel generation: {num_images} images across {workers} workers")
-    print(f"  {images_per_worker} images/worker" + (f" (+1 for first {remainder})" if remainder else ""))
-    if args.start_from > 0:
-        print(f"  Starting from index {args.start_from}")
     if not args.overwrite:
         print(f"  Skipping existing images")
     print()
 
     # Build commands for each worker
     cmds = []
-    start = args.start_from
+    all_indices = args._indices
+    chunk_size = len(all_indices) // workers
+    remainder = len(all_indices) % workers
+    offset = 0
     for w in range(workers):
-        chunk = images_per_worker + (1 if w < remainder else 0)
-        cmd = _build_cmd(blender, blend_file, args, chunk, start_index=start, worker_id=w)
+        chunk = chunk_size + (1 if w < remainder else 0)
+        worker_indices = all_indices[offset:offset + chunk]
+        cmd = _build_cmd(blender, blend_file, args, chunk, indices=worker_indices, worker_id=w)
         cmds.append((cmd, w))
-        print(f"  Worker {w}: images [{start}..{start + chunk - 1}]")
-        start += chunk
+        print(f"  Worker {w}: {chunk} images (indices: {worker_indices[0]}..{worker_indices[-1]})")
+        offset += chunk
 
     if args.dry_run:
         print()

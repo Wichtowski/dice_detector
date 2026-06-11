@@ -83,7 +83,8 @@ synthetic: ## Generate synthetic dataset with Blender
 	uv run python synthetic/generate.py \
 		--num-images $(NUM_IMAGES) --config $(SYNTH_CONFIG) --output $(SYNTH_OUTPUT) \
 		--blend-file $(BLEND_FILE) $(if $(SEED),--seed $(SEED),) \
-		$(if $(filter-out 1,$(WORKERS)),--workers $(WORKERS),)
+		$(if $(filter-out 1,$(WORKERS)),--workers $(WORKERS),) \
+		$(if $(ADD_ANNOTATED_IMAGES),--add-annotated-images,)
 
 synthetic-preview: ## Generate 1 image for preview
 	uv run python synthetic/generate.py \
