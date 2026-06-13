@@ -1,7 +1,7 @@
 .PHONY: help install install-amd install-nvidia dev \
        run gui api test-detect annotate \
        train train-detect train-recog train-all evaluate export \
-       synthetic synthetic-preview \
+       synthetic synthetic-preview check-gaps \
        annotator-api annotator-ui \
        lint typecheck test format \
        clean clean-synthetic kaggle-dataset
@@ -95,6 +95,9 @@ synthetic-gui: ## Generate with Blender GUI (for debugging)
 	uv run python synthetic/generate.py \
 		--num-images 1 --config $(SYNTH_CONFIG) --output $(SYNTH_OUTPUT) \
 		--blend-file $(BLEND_FILE) --no-background
+
+check-gaps: ## Check for gaps in synthetic renders
+	uv run python synthetic/check_gaps.py --output $(SYNTH_OUTPUT)
 
 annotator-api:
 	uv run python -m dice_detector.training.annotator_api \
