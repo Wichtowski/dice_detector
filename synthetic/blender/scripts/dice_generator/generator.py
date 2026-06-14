@@ -73,6 +73,7 @@ class BlenderDiceGenerator:
         self.images_dir = self.output_dir / "images"
         self.images_annotated_dir = self.output_dir / "images_annotated"
         self.annotations_dir = self.output_dir / "annotations"
+        self.labels_dir = self.output_dir / "labels"
         self.metadata_dir = self.output_dir / "metadata"
         self.logs_dir = self.output_dir / "logs"
 
@@ -224,63 +225,52 @@ class BlenderDiceGenerator:
                     obj.hide_render = True
                     obj.hide_viewport = True
 
-    def _randomize_source_dice_visibility(self):
-        """Randomly show some source dice with class-balanced selection.
+    def _sample_dice_count(self) -> int:
+        """Sample a dice count from the configured distribution."""
+        dist = self.config.dice_count_distribution
+        ranges = [(r[0], r[1]) for r in dist]
+        weights = [r[2] for r in dist]
+        chosen = random.choices(ranges, weights=weights, k=1)[0]
+        return random.randint(chosen[0], chosen[1])
 
-        Uses config min_dice_per_image / max_dice_per_image to control count.
-        Balances selection across dice types so each class gets roughly equal
-        representation across the dataset.
-        Handles D100 solo mode: D100+D10 pair thrown alone with a configured
-        probability. Otherwise ensures D100+D10 pairing within normal rolls.
+    def _randomize_source_dice_visibility(self):
+        """Randomly show source dice with class-balanced selection.
+
+        Samples dice count from the configured distribution to produce
+        varied scene densities (isolated, clustered, crowded).
+        Balances selection across all dice types via round-robin so each
+        class gets roughly equal representation across the dataset.
         """
         self.visible_source_dice = []
+        num_visible = self._sample_dice_count()
 
-        # Check for D100 solo roll
-        is_d100_solo = (
-            self.config.d100_solo_mode
-            and random.random() < self.config.d100_solo_probability
-        )
+        # Group all available dice by type
+        by_type = {}
+        for d in self.available_dice:
+            parsed = parse_die_name(d.name)
+            if parsed:
+                dtype = parsed.dice_type
+                by_type.setdefault(dtype, []).append(d)
 
-        if is_d100_solo:
-            visible_dice = self._pick_d100_solo_dice()
-        else:
-            # Normal roll: class-balanced selection (excluding D100)
-            non_d100 = [
-                d for d in self.available_dice
-                if not (parse_die_name(d.name) and parse_die_name(d.name).dice_type == "D100")
-            ]
+        target = min(num_visible, len(self.available_dice))
 
-            # Group by dice type
-            by_type = {}
-            for d in non_d100:
-                parsed = parse_die_name(d.name)
-                if parsed:
-                    dtype = parsed.dice_type
-                    by_type.setdefault(dtype, []).append(d)
-
-            min_visible = max(1, self.config.min_dice_per_image)
-            max_visible = min(self.config.max_dice_per_image, len(non_d100))
-            if min_visible > max_visible:
-                min_visible = max_visible
-            num_visible = random.randint(min_visible, max_visible)
-
-            # Round-robin across types to ensure balance
-            types = list(by_type.keys())
-            random.shuffle(types)
-            visible_dice = []
-            type_idx = 0
-            while len(visible_dice) < num_visible and types:
-                dtype = types[type_idx % len(types)]
-                available = [d for d in by_type[dtype] if d not in visible_dice]
-                if available:
-                    visible_dice.append(random.choice(available))
-                else:
-                    types.remove(dtype)
-                    if not types:
-                        break
-                    type_idx = type_idx % len(types)
-                    continue
-                type_idx += 1
+        # Round-robin across types to ensure balance
+        types = list(by_type.keys())
+        random.shuffle(types)
+        visible_dice = []
+        type_idx = 0
+        while len(visible_dice) < target and types:
+            dtype = types[type_idx % len(types)]
+            available = [d for d in by_type[dtype] if d not in visible_dice]
+            if available:
+                visible_dice.append(random.choice(available))
+            else:
+                types.remove(dtype)
+                if not types:
+                    break
+                type_idx = type_idx % len(types)
+                continue
+            type_idx += 1
 
         # First hide all source dice
         for die in self.available_dice:
@@ -327,92 +317,6 @@ class BlenderDiceGenerator:
                 child.hide_viewport = False
 
         print(f"  Showing {len(visible_dice)}/{len(self.available_dice)} source dice")
-
-    def _ensure_d100_d10_pairing(self, visible_dice: list) -> list:
-        """Ensure every visible D100 has a matching D10 of the same material.
-
-        If a D100 is selected but its matching D10 is not, add the D10.
-        """
-        # Build lookup of visible dice by (material, type)
-        visible_set = set(id(d) for d in visible_dice)
-
-        # Find all D100 dice in the visible set
-        d100_dice = []
-        for die in visible_dice:
-            parsed = parse_die_name(die.name)
-            if parsed and parsed.dice_type == "D100":
-                d100_dice.append((die, parsed))
-
-        if not d100_dice:
-            return visible_dice
-
-        # For each D100, find matching D10 with the same material_number
-        for d100_die, d100_parsed in d100_dice:
-            # Check if a D10 of the same material is already visible
-            has_matching_d10 = False
-            for die in visible_dice:
-                parsed = parse_die_name(die.name)
-                if (parsed and parsed.dice_type == "D10"
-                        and parsed.material_number == d100_parsed.material_number):
-                    has_matching_d10 = True
-                    break
-
-            if has_matching_d10:
-                continue
-
-            # Find D10 with same material in all available dice
-            for die in self.available_dice:
-                if id(die) in visible_set:
-                    continue
-                parsed = parse_die_name(die.name)
-                if (parsed and parsed.dice_type == "D10"
-                        and parsed.material_number == d100_parsed.material_number):
-                    visible_dice.append(die)
-                    visible_set.add(id(die))
-                    print(f"  Added matching D10 ({die.name}) for D100 ({d100_die.name})")
-                    break
-
-        return visible_dice
-
-    def _pick_d100_solo_dice(self) -> list:
-        """Pick a random D100 + its matching D10 + one of every other dice type."""
-        d100_dice = [
-            d for d in self.available_dice
-            if parse_die_name(d.name) and parse_die_name(d.name).dice_type == "D100"
-        ]
-        if not d100_dice:
-            return []
-
-        d100 = random.choice(d100_dice)
-        d100_parsed = parse_die_name(d100.name)
-        result = [d100]
-        used_ids = {id(d100)}
-
-        # Find matching D10
-        for die in self.available_dice:
-            parsed = parse_die_name(die.name)
-            if (parsed and parsed.dice_type == "D10"
-                    and parsed.material_number == d100_parsed.material_number):
-                result.append(die)
-                used_ids.add(id(die))
-                print(f"  D100 solo roll: {d100.name} + {die.name}")
-                break
-
-        # Add one of every other dice type
-        for dtype in ("D4", "D6", "D8", "D12", "D20"):
-            candidates = [
-                d for d in self.available_dice
-                if id(d) not in used_ids
-                and parse_die_name(d.name)
-                and parse_die_name(d.name).dice_type == dtype
-            ]
-            if candidates:
-                picked = random.choice(candidates)
-                result.append(picked)
-                used_ids.add(id(picked))
-                print(f"  D100 roll: added {picked.name} ({dtype})")
-
-        return result
 
     def _randomize_resolution(self):
         """Randomize image resolution from configured presets."""
@@ -484,6 +388,12 @@ class BlenderDiceGenerator:
 
         num_images = self.config.num_images
         indices = self.config.indices or list(range(self.config.start_index, self.config.start_index + num_images))
+        dist = self.config.dice_count_distribution
+        self.logger.info(f"Dice count distribution:")
+        total_weight = sum(r[2] for r in dist)
+        for r in dist:
+            pct = r[2] / total_weight * 100
+            self.logger.info(f"  {r[0]:2d}-{r[1]:2d} dice: {pct:.0f}%")
         self.logger.info(f"Generating {len(indices)} images...")
 
         successful = 0
@@ -509,6 +419,7 @@ class BlenderDiceGenerator:
         if self.config.create_annotated_images:
             self.images_annotated_dir.mkdir(parents=True, exist_ok=True)
         self.annotations_dir.mkdir(parents=True, exist_ok=True)
+        self.labels_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -582,8 +493,9 @@ class BlenderDiceGenerator:
         # Collect annotations using pixel-perfect bboxes
         dice_annotations = self._collect_source_dice_annotations(bbox_map)
 
-        # Save annotation
+        # Save annotation (JSON + YOLO labels)
         self._save_annotation(image_id, dice_annotations)
+        self._save_yolo_label(image_id, dice_annotations)
 
         # Create annotated image with bboxes (only if enabled)
         if self.config.create_annotated_images:
@@ -866,6 +778,39 @@ class BlenderDiceGenerator:
         annotation_path = self.annotations_dir / f"{image_id}.json"
         with open(annotation_path, "w") as f:
             json.dump(annotation, f, indent=2)
+
+    # Class index mapping for YOLO labels
+    DICE_TYPE_TO_CLASS = {
+        "D4": 0, "D6": 1, "D8": 2, "D10": 3, "D12": 4, "D20": 5, "D100": 6,
+    }
+
+    def _save_yolo_label(self, image_id: str, dice_annotations: list):
+        """Save YOLO-format label file (.txt) alongside JSON annotation."""
+        img_w = self.config.image_width
+        img_h = self.config.image_height
+        lines = []
+
+        for die in dice_annotations:
+            class_id = self.DICE_TYPE_TO_CLASS.get(die["dice_type"])
+            if class_id is None:
+                continue
+
+            bbox = die["bbox"]
+            x_center = (bbox["x"] + bbox["width"] / 2) / img_w
+            y_center = (bbox["y"] + bbox["height"] / 2) / img_h
+            width = bbox["width"] / img_w
+            height = bbox["height"] / img_h
+
+            # Clamp to valid range
+            x_center = max(0.0, min(1.0, x_center))
+            y_center = max(0.0, min(1.0, y_center))
+            width = max(0.001, min(1.0, width))
+            height = max(0.001, min(1.0, height))
+
+            lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
+
+        label_path = self.labels_dir / f"{image_id}.txt"
+        label_path.write_text("\n".join(lines) + "\n" if lines else "")
 
     def _save_generation_metadata(self, num_generated: int, errors: list | None = None):
         """Save metadata about the generation run."""

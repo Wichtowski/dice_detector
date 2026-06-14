@@ -7,8 +7,19 @@ class GeneratorConfig:
     num_images: int = 100
     image_width: int = 1280
     image_height: int = 720
-    min_dice_per_image: int = 4
-    max_dice_per_image: int = 25
+
+    # Dice count distribution: list of (min, max, weight) ranges.
+    # Weight = relative share of dataset for that range.
+    dice_count_distribution: list[list] = field(
+        default_factory=lambda: [
+            [1, 3, 15],    # isolated dice — 15%
+            [4, 8, 25],    # small group — 25%
+            [9, 15, 35],   # medium cluster — 35%
+            [16, 25, 20],  # crowded — 20%
+            [26, 40, 5],   # very crowded — 5%
+        ]
+    )
+
     render_samples: int = 64
     enable_denoising: bool = True
     random_seed: int | None = None
@@ -24,10 +35,6 @@ class GeneratorConfig:
     resolution_presets: list[str] = field(
         default_factory=lambda: ["16:9", "9:16", "1:1", "4:3", "3:4"]
     )
-
-    # D100 solo rule: D100+D10 pair thrown alone
-    d100_solo_mode: bool = True
-    d100_solo_probability: float = 0.15  # chance of a D100 solo image
 
     # Dice collection settings
     dice_collections: list[str] = field(

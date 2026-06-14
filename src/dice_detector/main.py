@@ -69,9 +69,11 @@ def main() -> int:
     elif args.mode == "api":
         return run_api(args.host, args.port, args.reload)
     elif args.mode == "annotate":
-        return run_annotator(args)
+        print("Annotator moved to: python -m dice_detector.training.annotator_api")
+        return 1
     elif args.mode == "train":
-        return run_training()
+        print("Training moved to notebooks. See notebooks/kaggle/ or notebooks/local/")
+        return 1
     elif args.mode == "test":
         return run_test(args)
 
@@ -111,46 +113,7 @@ def run_api(host: str, port: int, reload: bool) -> int:
     return 0
 
 
-def run_annotator(args) -> int:
-    from dice_detector.training import AnnotationTool
-    from dice_detector.training.annotator_gui import run_session_gui
 
-    if not args.images_dir:
-        print("Error: --images-dir is required for annotation mode")
-        return 1
-
-    output_dir = args.output_dir or "data/annotations"
-    tool = AnnotationTool(args.images_dir, output_dir)
-    run_session_gui(tool, camera_index=args.camera, skip_capture=args.skip_capture)
-    return 0
-
-
-def run_training() -> int:
-    from dice_detector.training import DatasetManager
-
-    print("Training mode")
-    print("=" * 50)
-
-    dataset = DatasetManager()
-    stats = dataset.get_statistics()
-
-    print(f"Total images: {stats['total_images']}")
-    print(f"Total annotations: {stats['total_annotations']}")
-    print(f"By class: {stats['by_class']}")
-    print(f"By split: {stats['by_split']}")
-
-    if stats["total_images"] < 100:
-        print("\nWarning: Dataset is small. Consider adding more samples.")
-        print("Use annotation mode to add more labeled images.")
-        return 0
-
-    print("\nExporting dataset for YOLO training...")
-    dataset.export_yolo_format("data/yolo_export")
-    print("Dataset exported to data/yolo_export/")
-
-    print("\nTo train the model, run:")
-    print("  yolo detect train data=data/yolo_export/data.yaml model=yolo11n.pt epochs=150")
-    return 0
 
 
 def run_test(args) -> int:
