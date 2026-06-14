@@ -18,3 +18,5 @@ images_annotated
 annotations
 logs
 metadata
+
+*.pt
