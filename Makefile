@@ -9,7 +9,7 @@
 # Config
 BLEND_FILE     ?= blender/dices.blend
 SYNTH_CONFIG   ?= synthetic/blender/configs/default_blender_generation.json
-SYNTH_OUTPUT   ?= data/generated/blender
+SYNTH_OUTPUT   ?= data/blender_synthetic
 NUM_IMAGES     ?= 100
 WORKERS        ?= 4
 SEED           ?=
@@ -76,7 +76,7 @@ export: ## Export model to ONNX/TensorRT
 	uv run python -m dice_detector.training.train --action export \
 		$(if $(MODEL),--model $(MODEL),)
 
-prepare-dataset:
+prepare_dataset:
 	uv run python -m dice_detector.training.train --action prepare --data $(DATASET)
 
 synthetic: ## Generate synthetic dataset with Blender
@@ -86,22 +86,26 @@ synthetic: ## Generate synthetic dataset with Blender
 		$(if $(filter-out 1,$(WORKERS)),--workers $(WORKERS),) \
 		$(if $(ADD_ANNOTATED_IMAGES),--add-annotated-images,)
 
-synthetic-preview: ## Generate 1 image for preview
+synthetic_preview: ## Generate 1 image for preview
 	uv run python synthetic/generate.py \
 		--num-images 1 --config $(SYNTH_CONFIG) --output $(SYNTH_OUTPUT) \
 		--blend-file $(BLEND_FILE) $(if $(SEED),--seed $(SEED),)
 
-synthetic-gui: ## Generate with Blender GUI (for debugging)
+synthetic_gui: ## Generate with Blender GUI (for debugging)
 	uv run python synthetic/generate.py \
 		--num-images 1 --config $(SYNTH_CONFIG) --output $(SYNTH_OUTPUT) \
 		--blend-file $(BLEND_FILE) --no-background
 
-check-gaps: ## Check for gaps in synthetic renders
+check_gaps: ## Check for gaps in synthetic renders
 	uv run python synthetic/check_gaps.py --output $(SYNTH_OUTPUT)
+
+convert_annotations: ## Convert JSON annotations to YOLO .txt labels
+	uv run python synthetic/convert_annotations.py --data-dir $(SYNTH_OUTPUT)
 
 annotator-api:
 	uv run python -m dice_detector.training.annotator_api \
-		--images $(IMAGES_DIR) --output $(ANNOT_DIR) --host $(HOST) --port $(PORT)
+		--images $(IMAGES_DIR) --output $(ANNOT_DIR) --host $(HOST) --port $(PORT) \
+		--extra-source web:data/web/images:data/web/labels
 
 annotator-ui:
 	cd annotator-ui && npm run dev
@@ -122,7 +126,7 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	rm -rf .mypy_cache .pytest_cache .ruff_cache dist build *.egg-info
 
-clean-synthetic: ## Remove all generated synthetic data
+clean_synthetic: ## Remove all generated synthetic data
 	find $(SYNTH_OUTPUT)/images -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 	find $(SYNTH_OUTPUT)/images_annotated -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 	find $(SYNTH_OUTPUT)/annotations -type f ! -name '.gitkeep' -delete 2>/dev/null || true

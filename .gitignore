@@ -5,12 +5,15 @@ __pycache__
 .wav
 target
 
+runs/
+
 node_modules
 dist
 .vite
 *.local
 
 images
+labels
 images_annotated
 annotations
 logs

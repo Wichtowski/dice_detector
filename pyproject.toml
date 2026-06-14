@@ -17,14 +17,17 @@ dependencies = [
     "easyocr>=1.7.0",
     "customtkinter>=5.2.0",
     "pyyaml>=6.0",
+    "scikit-learn>=1.4.0",
     "aiohttp>=3.9.0",
     "httpx>=0.27.0",
+    "python-multipart>=0.0.32",
 ]
 
 [project.optional-dependencies]
 amd = [
-    "torch==2.5.1",
-    "pytorch-triton-rocm==3.1.0",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0",
+    "pytorch-triton-rocm>=3.5.0",
 ]
 nvidia = [
     "torch>=2.4.0",
@@ -75,15 +78,18 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-rocm62", extra = "amd" },
+    { index = "pytorch-rocm64", extra = "amd" },
     { index = "pytorch-cu124", extra = "nvidia" },
 ]
-pytorch-triton-rocm = { index = "pytorch-rocm62", extra = "amd" }
-torchvision = { index = "pytorch-cu124", extra = "nvidia" }
+torchvision = [
+    { index = "pytorch-rocm64", extra = "amd" },
+    { index = "pytorch-cu124", extra = "nvidia" },
+]
+pytorch-triton-rocm = { index = "pytorch-rocm64", extra = "amd" }
 
 [[tool.uv.index]]
-name = "pytorch-rocm62"
-url = "https://download.pytorch.org/whl/rocm6.2"
+name = "pytorch-rocm64"
+url = "https://download.pytorch.org/whl/rocm6.4"
 explicit = true
 
 [[tool.uv.index]]
