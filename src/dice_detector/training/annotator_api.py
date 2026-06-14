@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -191,6 +191,32 @@ class AnnotatorAPI:
                 "special_values": [s.value for s in SpecialValue],
                 "d4_styles": [s.value for s in D4Style],
             }
+
+        @app.post("/api/camera/capture")
+        async def camera_capture(image: UploadFile = File(...)):
+            web_images_dir = Path("data/web/images")
+            web_labels_dir = Path("data/web/labels")
+            web_images_dir.mkdir(parents=True, exist_ok=True)
+            web_labels_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"capture_{timestamp}.png"
+            save_path = web_images_dir / filename
+
+            contents = await image.read()
+            save_path.write_bytes(contents)
+
+            image_id = save_path.stem
+
+            # Register web source if not already present
+            if "web" not in self.sources:
+                self.sources["web"] = {
+                    "images": web_images_dir,
+                    "annotations": web_labels_dir,
+                    "read_only": False,
+                }
+
+            return {"status": "saved", "image_id": image_id, "filename": filename}
 
         dist_dir = Path(__file__).parent.parent.parent.parent / "annotator-ui" / "dist"
         if dist_dir.exists() and not dev_ui_url:
