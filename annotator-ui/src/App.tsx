@@ -5,6 +5,7 @@ import { AnnotatorCanvas } from './components/AnnotatorCanvas.tsx'
 import { AnnotationPanel } from './components/AnnotationPanel.tsx'
 import { ImageNavigator } from './components/ImageNavigator'
 import { BBoxList } from './components/BBoxList'
+import { CameraCapture } from './components/CameraCapture'
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9)
@@ -169,6 +170,14 @@ export default function App() {
       <div className="w-72 bg-gray-800 flex flex-col">
         <div className="p-4 border-b border-gray-700">
           <h1 className="text-xl font-bold">Dice Annotator</h1>
+        </div>
+
+        <div className="p-4 border-b border-gray-700">
+          <CameraCapture
+            onCapture={(imageId) => {
+              loadPage(page).then(() => loadImage(imageId))
+            }}
+          />
         </div>
 
         <ImageNavigator

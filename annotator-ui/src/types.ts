@@ -44,3 +44,10 @@ export interface PaginatedImages {
   total: number
   total_pages: number
 }
+
+export interface Config {
+  dice_types: string[]
+  ambiguity_reasons: string[]
+  special_values: string[]
+  d4_styles: string[]
+}
