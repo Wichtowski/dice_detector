@@ -140,5 +140,6 @@ clean_synthetic: ## Remove all generated synthetic data
 	find $(SYNTH_OUTPUT)/images_annotated -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 	find $(SYNTH_OUTPUT)/annotations -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 	find $(SYNTH_OUTPUT)/metadata -type f ! -name '.gitkeep' -delete 2>/dev/null || true
+	find $(SYNTH_OUTPUT)/labels -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 	find $(SYNTH_OUTPUT)/logs -type f ! -name '.gitkeep' -delete 2>/dev/null || true
 	@echo "Cleaned synthetic data from $(SYNTH_OUTPUT)"
