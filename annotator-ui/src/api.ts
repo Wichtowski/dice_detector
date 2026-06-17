@@ -45,3 +45,74 @@ export async function deleteImage(
   }
   return res.json()
 }
+
+export async function cropImage(
+  imageId: string,
+  x: number,
+  y: number,
+  size: number
+): Promise<{ status: string; width: number; height: number }> {
+  const res = await fetch(`${API_BASE}/images/${imageId}/crop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ x, y, size }),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Crop failed')
+  }
+  return res.json()
+}
+
+export async function uploadImage(
+  file: File
+): Promise<{ status: string; image_id: string; filename: string }> {
+  const formData = new FormData()
+  formData.append('image', file, file.name)
+  const res = await fetch(`${API_BASE}/images/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Upload failed')
+  }
+  return res.json()
+}
+
+export async function scaleImage(
+  imageId: string,
+  size: number
+): Promise<{ status: string; width: number; height: number }> {
+  const res = await fetch(`${API_BASE}/images/${imageId}/scale`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ size }),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Scale failed')
+  }
+  return res.json()
+}
+
+export interface TypeStat {
+  type: string
+  count: number
+  goal: number
+  faces_total: number
+  faces_covered: number
+  faces_complete: number
+  values: Record<string, number>
+}
+
+export interface Stats {
+  total: number
+  per_face_goal: number
+  types: TypeStat[]
+}
+
+export async function fetchStats(): Promise<Stats> {
+  const res = await fetch(`${API_BASE}/stats`)
+  return res.json()
+}

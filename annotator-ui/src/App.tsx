@@ -1,16 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Annotation, ImageInfo, ImageListItem, Config, PaginatedImages } from './types'
-import { fetchImages, fetchImage, fetchConfig, saveAnnotations, deleteImage } from './api'
+import { fetchImages, fetchImage, fetchConfig, saveAnnotations, deleteImage, cropImage, uploadImage, scaleImage } from './api'
 import { AnnotatorCanvas } from './components/AnnotatorCanvas.tsx'
 import { AnnotationPanel } from './components/AnnotationPanel.tsx'
 import { ImageNavigator } from './components/ImageNavigator'
 import { BBoxList } from './components/BBoxList'
 import { CameraCapture } from './components/CameraCapture'
+import { CropModal } from './components/CropModal'
+import { StatsTracker } from './components/StatsTracker'
 import { DICE_COLORS } from './diceColors'
 
 function generateId(): string {
   return Math.random().toString(36).substring(2, 9)
 }
+
+const SCALE_PRESETS = [320, 416, 512, 640, 768, 1024, 1280]
 
 export default function App() {
   const [images, setImages] = useState<ImageListItem[]>([])
@@ -31,6 +35,12 @@ export default function App() {
   const [verifying, setVerifying] = useState(false)
   const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set())
   const [view, setView] = useState<'annotate' | 'verify'>('annotate')
+  const [cropTarget, setCropTarget] = useState<ImageInfo | null>(null)
+  const [cropping, setCropping] = useState(false)
+  const [showScaleMenu, setShowScaleMenu] = useState(false)
+  const [scaling, setScaling] = useState(false)
+  const [statsVersion, setStatsVersion] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const toVerify = view === 'verify'
 
   const applyPageData = useCallback((data: PaginatedImages) => {
@@ -54,7 +64,7 @@ export default function App() {
 
   const loadImage = useCallback(async (imageId: string) => {
     const info = await fetchImage(imageId)
-    setCurrentImage(info)
+    setCurrentImage({ ...info, url: `${info.url}?t=${Date.now()}` })
     const loaded = info.annotations.map((a) => ({ ...a, id: generateId() }))
     setAnnotations(loaded)
     setOriginalAnnotations(loaded)
@@ -62,9 +72,10 @@ export default function App() {
     setReadOnly(info.read_only ?? false)
     setIsVerified(info.is_verified ?? false)
     // Keep verification mode active across images; just reset per-image progress.
-    if (info.read_only) setVerifying(false)
+    setVerifying(toVerify && !(info.read_only ?? false))
     setConfirmedIds(new Set())
-  }, [])
+    setShowScaleMenu(false)
+  }, [toVerify])
 
   useEffect(() => {
     if (images.length > 0 && !currentImage) {
@@ -117,6 +128,7 @@ export default function App() {
       const result = await saveAnnotations(currentImage.id, toSave, verify)
       setIsVerified(verify)
       setMessage(verify ? `Verified ${result.count} annotations` : `Saved ${result.count} annotations`)
+      setStatsVersion((v) => v + 1)
       const prevItem = images.find((img) => img.id === currentImage.id)
       if (prevItem && !prevItem.annotated) setTotalAnnotated((n) => n + 1)
       if (prevItem) {
@@ -239,11 +251,90 @@ export default function App() {
       setCurrentImage(null)
       setAnnotations([])
       setSelectedId(null)
+      setStatsVersion((v) => v + 1)
       await loadPage(page)
     } catch (e) {
       setMessage(`Delete failed: ${e instanceof Error ? e.message : e}`)
     }
   }, [currentImage, readOnly, page, loadPage])
+
+  const openCrop = useCallback(async (imageId: string) => {
+    try {
+      const info = await fetchImage(imageId)
+      setCropTarget({ ...info, url: `${info.url}?t=${Date.now()}` })
+    } catch (e) {
+      setMessage(`Could not open crop: ${e instanceof Error ? e.message : e}`)
+    }
+  }, [])
+
+  const handleCropConfirm = useCallback(
+    async (crop: { x: number; y: number; size: number }) => {
+      if (!cropTarget) return
+      const id = cropTarget.id
+      setCropping(true)
+      try {
+        // Persist any unsaved annotations on the open image so the backend
+        // can remap them into the cropped coordinate space.
+        if (currentImage && currentImage.id === id && !readOnly) {
+          const toSave = annotations.map(({ id: _, ...rest }) => rest)
+          await saveAnnotations(id, toSave, isVerified)
+        }
+        await cropImage(id, crop.x, crop.y, crop.size)
+        setCropTarget(null)
+        await loadPage(page)
+        await loadImage(id)
+        setStatsVersion((v) => v + 1)
+        setMessage('Image cropped')
+        setTimeout(() => setMessage(null), 2000)
+      } catch (e) {
+        setMessage(`Crop failed: ${e instanceof Error ? e.message : e}`)
+      }
+      setCropping(false)
+    },
+    [cropTarget, page, loadPage, loadImage, currentImage, readOnly, annotations, isVerified]
+  )
+
+  const handleScale = useCallback(
+    async (size: number) => {
+      if (!currentImage || readOnly) return
+      const id = currentImage.id
+      setShowScaleMenu(false)
+      setScaling(true)
+      try {
+        // Persist unsaved annotations so the backend scales them too.
+        const toSave = annotations.map(({ id: _, ...rest }) => rest)
+        await saveAnnotations(id, toSave, isVerified)
+        const res = await scaleImage(id, size)
+        await loadPage(page)
+        await loadImage(id)
+        setStatsVersion((v) => v + 1)
+        setMessage(`Scaled to ${res.width}×${res.height}`)
+        setTimeout(() => setMessage(null), 2000)
+      } catch (e) {
+        setMessage(`Scale failed: ${e instanceof Error ? e.message : e}`)
+      }
+      setScaling(false)
+    },
+    [currentImage, readOnly, annotations, isVerified, page, loadPage, loadImage]
+  )
+
+  const handleUploadFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return
+      try {
+        let lastId: string | null = null
+        for (const file of Array.from(files)) {
+          const res = await uploadImage(file)
+          lastId = res.image_id
+        }
+        await loadPage(page)
+        if (lastId) await openCrop(lastId)
+      } catch (e) {
+        setMessage(`Upload failed: ${e instanceof Error ? e.message : e}`)
+      }
+    },
+    [page, loadPage, openCrop]
+  )
 
   const selectedAnnotation = annotations.find((a) => a.id === selectedId) || null
 
@@ -278,12 +369,29 @@ export default function App() {
         </div>
 
         {view === 'annotate' && (
-          <div className="p-4 border-b border-gray-700">
+          <div className="p-4 border-b border-gray-700 space-y-3">
             <CameraCapture
               onCapture={(imageId) => {
-                loadPage(page).then(() => loadImage(imageId))
+                loadPage(page).then(() => openCrop(imageId))
               }}
             />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handleUploadFiles(e.target.files)
+                e.target.value = ''
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 rounded px-3 py-1.5 text-sm font-semibold"
+            >
+              Upload Image
+            </button>
           </div>
         )}
 
@@ -345,28 +453,70 @@ export default function App() {
                   <span className="text-yellow-400 font-semibold">● Unverified</span>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2">
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 rounded p-2 font-semibold"
+                  className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 rounded p-2 font-semibold"
                 >
                   {saving ? 'Saving...' : 'Save (Ctrl+S)'}
                 </button>
-                <button
-                  onClick={() => { setAnnotations(originalAnnotations); setSelectedId(null) }}
-                  className="bg-gray-600 hover:bg-gray-500 rounded p-2 font-semibold text-sm"
-                  title="Reset to saved state"
-                >
-                  Reset
-                </button>
-                <button
-                  onClick={handleDeleteImage}
-                  className="bg-red-700 hover:bg-red-600 rounded p-2 font-semibold text-sm"
-                  title="Delete image"
-                >
-                  Delete
-                </button>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    onClick={() => { setAnnotations(originalAnnotations); setSelectedId(null) }}
+                    className="bg-gray-600 hover:bg-gray-500 rounded p-2 font-semibold text-sm"
+                    title="Reset to saved state"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={() => currentImage && openCrop(currentImage.id)}
+                    className="bg-amber-600 hover:bg-amber-500 rounded p-2 font-semibold text-sm"
+                    title="Crop image (square)"
+                  >
+                    Crop
+                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowScaleMenu((v) => !v)}
+                      disabled={scaling}
+                      className="w-full bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 rounded p-2 font-semibold text-sm"
+                      title="Scale image down to a preset size"
+                    >
+                      {scaling ? '...' : 'Scale'}
+                    </button>
+                    {showScaleMenu && (
+                      <div className="absolute bottom-full right-0 mb-1 w-32 bg-gray-700 rounded shadow-lg border border-gray-600 z-10 overflow-hidden">
+                        <p className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-gray-400 border-b border-gray-600">
+                          Longest side
+                        </p>
+                        {SCALE_PRESETS.map((size) => {
+                          const longest = Math.max(currentImage?.width ?? 0, currentImage?.height ?? 0)
+                          const disabled = size >= longest
+                          return (
+                            <button
+                              key={size}
+                              onClick={() => handleScale(size)}
+                              disabled={disabled}
+                              className="w-full text-left px-3 py-1.5 text-sm hover:bg-purple-600 disabled:text-gray-500 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                              title={disabled ? 'Image is already this size or smaller' : `Scale to ${size}px`}
+                            >
+                              {size}px
+                              {size === 640 && <span className="text-[10px] text-purple-300 ml-1">YOLO</span>}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleDeleteImage}
+                    className="col-span-3 bg-red-700 hover:bg-red-600 rounded p-2 font-semibold text-sm"
+                    title="Delete image"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             </>
           )}
@@ -409,7 +559,8 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 bg-gray-950 overflow-hidden">
+      <div className="flex-1 bg-gray-950 overflow-hidden relative">
+        <StatsTracker refreshKey={statsVersion} />
         {currentImage ? (
           <AnnotatorCanvas
             imageUrl={currentImage.url}
@@ -433,6 +584,17 @@ export default function App() {
           </div>
         ) : null}
       </div>
+
+      {cropTarget && (
+        <CropModal
+          imageUrl={cropTarget.url}
+          imageWidth={cropTarget.width}
+          imageHeight={cropTarget.height}
+          busy={cropping}
+          onConfirm={handleCropConfirm}
+          onCancel={() => setCropTarget(null)}
+        />
+      )}
     </div>
   )
 }

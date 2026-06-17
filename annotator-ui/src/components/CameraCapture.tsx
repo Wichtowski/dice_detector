@@ -93,10 +93,13 @@ export function CameraCapture({ onCapture }: CameraCaptureProps) {
 
     const video = videoRef.current
     const canvas = canvasRef.current
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    // Capture the full frame; cropping is done afterwards via the crop modal.
+    const vw = video.videoWidth
+    const vh = video.videoHeight
+    canvas.width = vw
+    canvas.height = vh
     const ctx = canvas.getContext('2d')!
-    ctx.drawImage(video, 0, 0)
+    ctx.drawImage(video, 0, 0, vw, vh)
 
     canvas.toBlob(async (blob) => {
       if (!blob) {
