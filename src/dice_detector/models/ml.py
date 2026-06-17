@@ -117,6 +117,10 @@ class ImageAnnotation(BaseModel):
         description="Source of the annotation: manual, synthetic, blender, auto",
     )
     timestamp: str | None = None
+    is_verified: bool = Field(
+        default=False,
+        description="Whether annotations have been human-verified",
+    )
     metadata: dict = Field(default_factory=dict)
 
     @computed_field
