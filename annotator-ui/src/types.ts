@@ -27,12 +27,14 @@ export interface ImageInfo {
   annotations: Omit<Annotation, 'id'>[]
   read_only: boolean
   source: string
+  is_verified: boolean
 }
 
 export interface ImageListItem {
   id: string
   name: string
   annotated: boolean
+  verified: boolean
   read_only: boolean
   source: string
 }
@@ -42,6 +44,8 @@ export interface PaginatedImages {
   page: number
   per_page: number
   total: number
+  total_annotated: number
+  total_verified: number
   total_pages: number
 }
 

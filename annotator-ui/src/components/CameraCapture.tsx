@@ -13,6 +13,7 @@ export function CameraCapture({ onCapture }: CameraCaptureProps) {
   const [error, setError] = useState<string | null>(null)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDevice, setSelectedDevice] = useState<string>('')
+  const [resolution, setResolution] = useState<string>('')
 
   const refreshDevices = useCallback(async () => {
     const all = await navigator.mediaDevices.enumerateDevices()
@@ -45,14 +46,15 @@ export function CameraCapture({ onCapture }: CameraCaptureProps) {
       const deviceId = selectedDevice || cameras[0]?.deviceId
       const constraints: MediaStreamConstraints = {
         video: deviceId
-          ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-          : { width: { ideal: 1920 }, height: { ideal: 1080 } },
+          ? { deviceId: { exact: deviceId }, width: { min: 1280, ideal: 4032 }, height: { min: 720, ideal: 3024 } }
+          : { width: { min: 1280, ideal: 4032 }, height: { min: 720, ideal: 3024 } },
       }
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
+        setResolution(`${videoRef.current.videoWidth}×${videoRef.current.videoHeight}`)
       }
       setActive(true)
     } catch (e) {
@@ -174,6 +176,7 @@ export function CameraCapture({ onCapture }: CameraCaptureProps) {
       </div>
 
       {error && <p className="text-xs text-red-400">{error}</p>}
+      {active && resolution && <p className="text-xs text-gray-500">{resolution}</p>}
     </div>
   )
 }

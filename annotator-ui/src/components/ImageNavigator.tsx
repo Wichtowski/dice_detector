@@ -9,13 +9,15 @@ interface Props {
   page: number
   totalPages: number
   total: number
+  totalAnnotated: number
+  totalVerified: number
   onPageChange: (page: number) => void
   readOnly: boolean
 }
  
 export function ImageNavigator({
   images, currentId, onSelect, onPrev, onNext,
-  page, totalPages, total, onPageChange, readOnly,
+  page, totalPages, total, totalAnnotated, totalVerified, onPageChange, readOnly,
 }: Props) {
   return (
     <div className="p-4 space-y-3">
@@ -27,7 +29,7 @@ export function ImageNavigator({
 
       <div>
         <label className="block text-xs text-gray-500 mb-1">
-          Image ({total} total)
+          Image (t:{total} a:{totalAnnotated} v:{totalVerified})
         </label>
         <select
           value={currentId || ''}
@@ -35,11 +37,14 @@ export function ImageNavigator({
           className="w-full bg-gray-700 rounded p-2 text-sm"
         >
           <option value="">Select...</option>
-          {images.map((img) => (
-            <option key={img.id} value={img.id}>
-              {img.annotated ? '✓ ' : ''}{img.read_only ? '🔒 ' : ''}{img.name}
-            </option>
-          ))}
+          {images.map((img) => {
+            const status = img.verified ? '✓' : img.annotated ? '—' : '✗'
+            return (
+              <option key={img.id} value={img.id}>
+                {status} {img.read_only ? '🔒 ' : ''}{img.name}
+              </option>
+            )
+          })}
         </select>
       </div>
  

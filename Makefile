@@ -103,9 +103,18 @@ convert_annotations: ## Convert JSON annotations to YOLO .txt labels
 	uv run python synthetic/convert_annotations.py --data-dir $(SYNTH_OUTPUT)
 
 annotator-api:
+	@if v4l2-ctl --list-devices 2>/dev/null | grep -q "Pixel"; then \
+		echo "Pixel camera already active"; \
+	elif [ -e /dev/video0 ]; then \
+		scrcpy --video-source=camera --camera-id=0 --camera-size=1920x1080 --v4l2-sink=/dev/video0 --no-playback & \
+		echo "Started Pixel camera stream"; \
+		sleep 2; \
+	else \
+		echo "Warning: /dev/video0 not found. Run: sudo modprobe v4l2loopback devices=1 video_nr=0 card_label=Pixel_Webcam"; \
+	fi
 	uv run python -m dice_detector.training.annotator_api \
 		--images $(IMAGES_DIR) --output $(ANNOT_DIR) --host $(HOST) --port $(PORT) \
-		--extra-source web:data/web/images:data/web/labels
+		--extra-source web:data/web/images:data/web/annotations
 
 annotator-ui:
 	cd annotator-ui && npm run dev
