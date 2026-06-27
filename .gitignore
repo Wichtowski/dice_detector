@@ -18,8 +18,12 @@ images_annotated
 annotations
 logs
 metadata
-
+batch
 *.pt
 
-!.gitkeep
+**/!.gitkeep
 *.tar.gz
+
+tsconfig.tsbuildinfo
+tsconfig.nod.tsbuildinfo
+ideas
