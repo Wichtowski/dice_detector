@@ -5,34 +5,16 @@ description = "IRL D&D dice detection with Foundry VTT integration"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=2.0.0",
     "opencv-python>=4.10.0",
-    "pillow>=10.0.0",
-    "ultralytics>=8.2.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
     "websockets>=12.0",
-    "easyocr>=1.7.0",
-    "customtkinter>=5.2.0",
-    "pyyaml>=6.0",
-    "scikit-learn>=1.4.0",
-    "aiohttp>=3.9.0",
-    "httpx>=0.27.0",
     "python-multipart>=0.0.32",
 ]
 
 [project.optional-dependencies]
-amd = [
-    "torch>=2.9.0",
-    "torchvision>=0.24.0",
-    "pytorch-triton-rocm>=3.5.0",
-]
-nvidia = [
-    "torch>=2.4.0",
-    "torchvision>=0.19.0",
-]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -41,9 +23,6 @@ dev = [
     "mypy>=1.10.0",
     "pre-commit>=3.7.0",
 ]
-
-[project.scripts]
-dice-detector = "dice_detector.main:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -70,29 +49,3 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-
-[tool.uv]
-conflicts = [
-    [{ extra = "nvidia" }, { extra = "amd" }],
-]
-
-[tool.uv.sources]
-torch = [
-    { index = "pytorch-rocm64", extra = "amd" },
-    { index = "pytorch-cu124", extra = "nvidia" },
-]
-torchvision = [
-    { index = "pytorch-rocm64", extra = "amd" },
-    { index = "pytorch-cu124", extra = "nvidia" },
-]
-pytorch-triton-rocm = { index = "pytorch-rocm64", extra = "amd" }
-
-[[tool.uv.index]]
-name = "pytorch-rocm64"
-url = "https://download.pytorch.org/whl/rocm6.4"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
-explicit = true

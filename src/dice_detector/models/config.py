@@ -27,8 +27,6 @@ class DiceInventory(BaseModel):
             DiceType.D12: self.D12,
             DiceType.D20: self.D20,
             DiceType.D100: self.D100,
-            DiceType.D100_TENS: self.D100,
-            DiceType.D100_ONES: self.D100,
         }
         return mapping.get(dice_type, 0)
 

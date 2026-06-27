@@ -7,7 +7,7 @@ Usage:
 Reads JSON annotations from <data-dir>/annotations/ and writes
 YOLO labels to <data-dir>/labels/. Existing labels are overwritten.
 
-Default data dir: data/blender_synthetic
+Default data dir: blender/data_synthetic
 """
 
 import argparse

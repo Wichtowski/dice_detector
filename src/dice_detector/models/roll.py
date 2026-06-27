@@ -305,8 +305,7 @@ class ExpectedRoll(BaseModel):
 
         if is_d100:
             expected_dice = [
-                (DiceType.D100_TENS, 1),
-                (DiceType.D100_ONES, 1),
+                (DiceType.D100, 1),
                 (DiceType.D4, 1),
                 (DiceType.D6, 1),
                 (DiceType.D8, 1),

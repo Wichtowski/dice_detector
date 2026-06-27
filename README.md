@@ -25,10 +25,6 @@ cd dice_detector
 
 # Sync dependencies
 uv sync
-
-# Install deps for amd or nvidia
-uv sync --amd
-uv sync --nvidia
 ```
 
 ## Usage
@@ -36,7 +32,7 @@ uv sync --nvidia
 ### Start the API Server
 
 ```bash
-uv run dice-detector --mode api --reload
+uv run uvicorn dice_detector.api:app --reload
 ```
 
 The API will be available at:

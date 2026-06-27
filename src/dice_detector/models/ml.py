@@ -69,12 +69,6 @@ class DiceAnnotation(BaseModel):
         default=None,
         description="Special symbol on the face, if any",
     )
-    orientation_degrees: float | None = Field(
-        default=None,
-        ge=0.0,
-        lt=360.0,
-        description="Rotation angle of the die face",
-    )
     ambiguous: bool = Field(
         default=False,
         description="Whether the annotation is uncertain",
@@ -83,10 +77,6 @@ class DiceAnnotation(BaseModel):
     d4_style: D4Style | None = Field(
         default=None,
         description="D4 interpretation style (top vertex vs bottom edge)",
-    )
-    has_6_9_marker: bool | None = Field(
-        default=None,
-        description="Whether the die has a visible 6/9 disambiguation marker",
     )
     visibility: float = Field(
         default=1.0,
@@ -98,8 +88,9 @@ class DiceAnnotation(BaseModel):
 
     @computed_field
     @property
-    def is_d100_percentile(self) -> bool:
-        return self.dice_type in (DiceType.D100, DiceType.D100_TENS)
+    def is_6_or_9_value(self) -> bool:
+        """True when the face value is 6 or 9 (potential confusion pair)."""
+        return self.value in (6, 9)
 
     @computed_field
     @property
@@ -131,7 +122,7 @@ class ImageAnnotation(BaseModel):
     @computed_field
     @property
     def dice_types_present(self) -> list[DiceType]:
-        return list(set(d.dice_type for d in self.dice))
+        return sorted(set(d.dice_type for d in self.dice), key=lambda t: t.value)
 
 
 class DicePrediction(BaseModel):

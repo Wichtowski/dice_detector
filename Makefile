@@ -1,6 +1,5 @@
-.PHONY: help install install-amd install-nvidia dev \
-       run gui api test-detect annotate \
-       train train-detect train-recog train-all evaluate export \
+.PHONY: help install dev \
+       run api \
        synthetic synthetic-preview check-gaps \
        annotator-api annotator-ui \
        lint typecheck test format \
@@ -9,20 +8,14 @@
 # Config
 BLEND_FILE     ?= blender/dices.blend
 SYNTH_CONFIG   ?= synthetic/blender/configs/default_blender_generation.json
-SYNTH_OUTPUT   ?= data/blender_synthetic
+SYNTH_OUTPUT   ?= blender/data_synthetic
 NUM_IMAGES     ?= 100
 WORKERS        ?= 4
 SEED           ?=
-CAMERA         ?= 0
-MODEL          ?=
 HOST           ?= 127.0.0.1
 PORT           ?= 8765
-EPOCHS         ?= 100
-BATCH          ?= 16
-IMGSZ          ?= 640
-DATASET        ?= data/dataset
-IMAGES_DIR     ?= data/images
-ANNOT_DIR      ?= data/annotations
+IMAGES_DIR     ?= data/web/images
+ANNOT_DIR      ?= data/web/annotations
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -31,53 +24,10 @@ help:
 install:
 	uv sync
 
-install-amd:
-	uv sync --extra amd
-
-install-nvidia:
-	uv sync --extra nvidia
-
-run: gui
-
-gui:
-	uv run dice-detector --mode gui $(if $(MODEL),--model $(MODEL),) --camera $(CAMERA)
+run: api
 
 api:
-	uv run dice-detector --mode api --host $(HOST) --port $(PORT)
-
-test-detect:
-	uv run dice-detector --mode test --camera $(CAMERA) $(if $(MODEL),--model $(MODEL),)
-
-annotate:
-	uv run dice-detector --mode annotate --images-dir $(IMAGES_DIR) --output-dir $(ANNOT_DIR)
-
-train:
-	uv run python -m dice_detector.training.train \
-		--action train --data $(DATASET) --epochs $(EPOCHS) --batch $(BATCH) --imgsz $(IMGSZ) \
-		$(if $(MODEL),--model $(MODEL),)
-
-train-detect: ## Train detection
-	uv run python -m dice_detector.training.multi_output_trainer \
-		--action train-detection --dataset $(DATASET) --epochs $(EPOCHS) --batch $(BATCH)
-
-train-recog: ## Train recognition
-	uv run python -m dice_detector.training.multi_output_trainer \
-		--action train-recognition --dataset $(DATASET) --epochs $(EPOCHS) --batch $(BATCH)
-
-train-all: ## Train both
-	uv run python -m dice_detector.training.multi_output_trainer \
-		--action train-all --dataset $(DATASET) --epochs $(EPOCHS) --batch $(BATCH)
-
-evaluate: ## Evaluate trained model
-	uv run python -m dice_detector.training.train --action evaluate --data $(DATASET) \
-		$(if $(MODEL),--model $(MODEL),)
-
-export: ## Export model to ONNX/TensorRT
-	uv run python -m dice_detector.training.train --action export \
-		$(if $(MODEL),--model $(MODEL),)
-
-prepare_dataset:
-	uv run python -m dice_detector.training.train --action prepare --data $(DATASET)
+	uv run uvicorn dice_detector.api:app --host $(HOST) --port $(PORT)
 
 synthetic: ## Generate synthetic dataset with Blender
 	uv run python synthetic/generate.py \
@@ -113,8 +63,7 @@ annotator-api:
 		echo "Warning: /dev/video0 not found. Run: sudo modprobe v4l2loopback devices=1 video_nr=0 card_label=Pixel_Webcam"; \
 	fi
 	uv run python -m dice_detector.training.annotator_api \
-		--images $(IMAGES_DIR) --output $(ANNOT_DIR) --host $(HOST) --port $(PORT) \
-		--extra-source web:data/web/images:data/web/annotations
+		--images $(IMAGES_DIR) --output $(ANNOT_DIR) --host $(HOST) --port $(PORT)
 
 annotator-ui:
 	cd annotator-ui && npm run dev

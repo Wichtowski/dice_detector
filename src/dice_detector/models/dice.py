@@ -12,8 +12,6 @@ class DiceType(str, Enum):
     D12 = "D12"
     D20 = "D20"
     D100 = "D100"
-    D100_TENS = "D100_TENS"
-    D100_ONES = "D100_ONES"
     UNKNOWN = "UNKNOWN"
 
     @property
@@ -26,8 +24,6 @@ class DiceType(str, Enum):
             DiceType.D12: 12,
             DiceType.D20: 20,
             DiceType.D100: 100,
-            DiceType.D100_TENS: 90,
-            DiceType.D100_ONES: 9,
         }
         return mapping.get(self, 0)
 
@@ -41,8 +37,6 @@ class DiceType(str, Enum):
             DiceType.D12: 12,
             DiceType.D20: 20,
             DiceType.D100: 100,
-            DiceType.D100_TENS: 10,
-            DiceType.D100_ONES: 10,
         }
         return mapping.get(self, 0)
 
