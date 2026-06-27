@@ -5,7 +5,7 @@ import type Konva from 'konva'
 import type { Annotation, BBox, Config } from '../types'
 import { diceColor, textColor } from '../diceColors'
 
-const DICE_VALUE_RANGES: Record<string, number[]> = {
+export const DICE_VALUE_RANGES: Record<string, number[]> = {
   D4: [1, 2, 3, 4],
   D6: [1, 2, 3, 4, 5, 6],
   D8: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -29,6 +29,9 @@ interface Props {
   onUpdate: (id: string, updates: Partial<Annotation>) => void
   onConfirmDie?: (id: string) => void
   readOnly?: boolean
+  // When set, drawing a box immediately adds it with this dice type and a null
+  // value (no type/value popup). Used by the batch template-stamp workflow.
+  quickAddType?: string | null
 }
  
 export function AnnotatorCanvas({
@@ -45,6 +48,7 @@ export function AnnotatorCanvas({
   onUpdate,
   onConfirmDie,
   readOnly,
+  quickAddType,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -70,10 +74,26 @@ export function AnnotatorCanvas({
     const img = new window.Image()
     img.src = imageUrl
     img.onload = () => setImage(img)
-    // Reset zoom/pan on image change
+    // Reset zoom on image change; centering is handled separately.
     setZoom(1)
-    setOffset({ x: 0, y: 0 })
   }, [imageUrl])
+
+  // Center the image in the viewport whenever a new image loads, the zoom
+  // resets to 1, or the container is resized.
+  useEffect(() => {
+    if (!image) return
+    const base = Math.min(
+      containerSize.width / imageWidth,
+      containerSize.height / imageHeight,
+      1
+    )
+    const displayW = imageWidth * base * zoom
+    const displayH = imageHeight * base * zoom
+    setOffset({
+      x: (containerSize.width - displayW) / 2,
+      y: (containerSize.height - displayH) / 2,
+    })
+  }, [image, imageUrl, containerSize, imageWidth, imageHeight])
  
   useEffect(() => {
     const updateSize = () => {
@@ -187,9 +207,14 @@ export function AnnotatorCanvas({
       return
     }
     if (isDrawing && drawRect && drawRect.width > 10 && drawRect.height > 10) {
-      setPendingBBox(drawRect)
-      setPendingType(config?.dice_types[0] || 'D6')
-      setPendingValue(null)
+      if (quickAddType) {
+        // Batch template mode: commit immediately, no type/value popup.
+        onAdd(drawRect, quickAddType, null)
+      } else {
+        setPendingBBox(drawRect)
+        setPendingType(config?.dice_types[0] || 'D6')
+        setPendingValue(null)
+      }
     }
     setIsDrawing(false)
     setDrawRect(null)

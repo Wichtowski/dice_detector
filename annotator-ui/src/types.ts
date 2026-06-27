@@ -10,10 +10,8 @@ export interface Annotation {
   bbox: BBox
   dice_type: string
   value: number | null
-  orientation_degrees: number | null
   ambiguous: boolean
   ambiguity_reasons: string[]
-  has_6_9_marker: boolean | null
   d4_style: string | null
   special_value: string | null
 }
@@ -37,6 +35,8 @@ export interface ImageListItem {
   verified: boolean
   read_only: boolean
   source: string
+  has_boxes?: boolean
+  pending_values?: number
 }
 
 export interface PaginatedImages {
@@ -46,6 +46,7 @@ export interface PaginatedImages {
   total: number
   total_annotated: number
   total_verified: number
+  total_pending?: number
   total_pages: number
 }
 
@@ -54,4 +55,11 @@ export interface Config {
   ambiguity_reasons: string[]
   special_values: string[]
   d4_styles: string[]
+}
+
+export interface BatchType {
+  source: string
+  dice_type: string
+  total: number
+  annotated: number
 }

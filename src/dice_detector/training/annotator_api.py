@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -33,10 +34,8 @@ class AnnotationData(BaseModel):
     bbox: BBoxData
     dice_type: str
     value: Optional[int] = None
-    orientation_degrees: Optional[float] = None
     ambiguous: bool = False
     ambiguity_reasons: list[str] = []
-    has_6_9_marker: Optional[bool] = None
     d4_style: Optional[str] = None
     special_value: Optional[str] = None
 
@@ -45,6 +44,11 @@ class SaveAnnotationsRequest(BaseModel):
     image_id: str
     annotations: list[AnnotationData]
     is_verified: bool = False
+
+
+class BatchCommitRequest(BaseModel):
+    image_id: str
+    annotations: list[AnnotationData]
 
 
 class CropRequest(BaseModel):
@@ -86,6 +90,56 @@ class AnnotatorAPI:
             except (json.JSONDecodeError, OSError):
                 self.annotation_goals = {}
 
+        # Root for per-dice-type batch folders (data/web/batch/{d4,d6,...}).
+        self.batch_root = Path("data/web/batch")
+        self._register_batch_sources()
+
+    # Dice-type folder name -> canonical DiceType value.
+    _BATCH_TYPE_MAP = {
+        "d4": "D4", "d6": "D6", "d8": "D8",
+        "d10": "D10", "d12": "D12", "d20": "D20", "d100": "D100",
+    }
+
+    def _register_batch_sources(self) -> None:
+        """Register one image source per dice type found under data/web/batch.
+
+        Supports either a flat layout (data/web/batch/d6/*.jpg) or a split
+        layout (data/web/batch/{train,valid}/d6/*.jpg); split folders are merged
+        into a single per-type source. Annotations and YOLO labels are written
+        to a per-type sidecar at data/web/batch/{type}/{annotations,labels}.
+        """
+        if not self.batch_root.exists():
+            return
+
+        # dice_type -> list of directories holding its images
+        type_dirs: dict[str, list[Path]] = {}
+        for child in sorted(self.batch_root.iterdir()):
+            if not child.is_dir() or child.name == "archive":
+                continue
+            dtype = self._BATCH_TYPE_MAP.get(child.name.lower())
+            if dtype is not None:
+                # Flat layout: data/web/batch/d6
+                type_dirs.setdefault(dtype, []).append(child)
+                continue
+            # Split layout: data/web/batch/{train,valid}/d6
+            for sub in sorted(child.iterdir()):
+                if sub.is_dir():
+                    sub_dtype = self._BATCH_TYPE_MAP.get(sub.name.lower())
+                    if sub_dtype is not None:
+                        type_dirs.setdefault(sub_dtype, []).append(sub)
+
+        for dtype, dirs in type_dirs.items():
+            name = f"batch-{dtype.lower()}"
+            sidecar = self.batch_root / dtype.lower()
+            self.sources[name] = {
+                "images": sidecar,          # sidecar holds annotations/labels
+                "image_dirs": dirs,         # actual image locations (may be many)
+                "annotations": sidecar / "annotations",
+                "read_only": False,
+                "batch": True,
+                "dice_type": dtype,
+            }
+
     def create_app(self, dev_ui_url: Optional[str] = None) -> FastAPI:
         app = FastAPI(title="Dice Annotation API")
 
@@ -98,16 +152,35 @@ class AnnotatorAPI:
         )
 
         @app.get("/api/images")
-        def list_images(page: int = 1, per_page: int = 100, source: Optional[str] = None, to_verify: bool = False):
+        def list_images(
+            page: int = 1,
+            per_page: int = 100,
+            source: Optional[str] = None,
+            to_verify: bool = False,
+            to_value: bool = False,
+            unannotated: bool = False,
+        ):
             all_images = self._get_all_image_list(source)
             total = len(all_images)
             total_annotated = sum(1 for img in all_images if img["annotated"])
             total_verified = sum(1 for img in all_images if img["verified"])
+            total_pending = sum(
+                1
+                for img in all_images
+                if img["has_boxes"] and img["pending_values"] > 0 and not img["read_only"]
+            )
             if to_verify:
                 all_images = [
                     img for img in all_images
                     if img["annotated"] and not img["verified"] and not img["read_only"]
                 ]
+            elif to_value:
+                all_images = [
+                    img for img in all_images
+                    if img["has_boxes"] and img["pending_values"] > 0 and not img["read_only"]
+                ]
+            elif unannotated:
+                all_images = [img for img in all_images if not img["annotated"]]
             filtered_total = len(all_images)
             total_pages = max(1, (filtered_total + per_page - 1) // per_page)
             page = max(1, min(page, total_pages))
@@ -118,11 +191,34 @@ class AnnotatorAPI:
                 "images": page_images,
                 "page": page,
                 "per_page": per_page,
-                "total": filtered_total if to_verify else total,
+                "total": filtered_total if (to_verify or to_value or unannotated) else total,
                 "total_annotated": total_annotated,
                 "total_verified": total_verified,
+                "total_pending": total_pending,
                 "total_pages": total_pages,
             }
+
+        @app.get("/api/batch/types")
+        def batch_types():
+            # Re-scan so newly added folders appear without a restart.
+            self._register_batch_sources()
+            out = []
+            for name, src in self.sources.items():
+                if not src.get("batch"):
+                    continue
+                imgs = self._get_source_images(name)
+                ann_dir = Path(src["annotations"])
+                annotated = sum(
+                    1 for im in imgs if (ann_dir / f"{im.stem}.json").exists()
+                )
+                out.append({
+                    "source": name,
+                    "dice_type": src["dice_type"],
+                    "total": len(imgs),
+                    "annotated": annotated,
+                })
+            out.sort(key=lambda x: x["dice_type"])
+            return {"types": out}
 
         @app.get("/api/images/{image_id}")
         def get_image_info(image_id: str):
@@ -200,11 +296,9 @@ class AnnotatorAPI:
                     ),
                     dice_type=DiceType(ann.dice_type) if ann.dice_type else DiceType.UNKNOWN,
                     value=ann.value,
-                    orientation_degrees=ann.orientation_degrees,
                     ambiguous=ann.ambiguous,
                     ambiguity_reasons=ambiguity_reasons,
                     d4_style=D4Style(ann.d4_style) if ann.d4_style else None,
-                    has_6_9_marker=ann.has_6_9_marker,
                     special_value=SpecialValue(ann.special_value) if ann.special_value else None,
                 )
                 dice_annotations.append(dice_ann)
@@ -247,6 +341,63 @@ class AnnotatorAPI:
             label_path.write_text("\n".join(yolo_lines) + "\n" if yolo_lines else "")
 
             return {"status": "saved", "path": str(out_path), "count": len(dice_annotations), "is_verified": req.is_verified}
+
+        @app.post("/api/batch/commit")
+        def batch_commit(req: BatchCommitRequest):
+            """Save a batch annotation, then move the image + label into the
+            main web dataset (data/web/{images,annotations,labels}).
+
+            Batch annotations are always marked verified.
+            """
+            source_name, img_path = self._find_image_with_source(req.image_id)
+            if not img_path:
+                raise HTTPException(404, "Image not found")
+            if self.sources[source_name].get("read_only", False):
+                raise HTTPException(403, "This image source is read-only")
+
+            import cv2
+            img = cv2.imread(str(img_path))
+            if img is None:
+                raise HTTPException(500, "Failed to read image")
+            h, w = img.shape[:2]
+
+            dice_annotations = self._build_dice_annotations(req.annotations)
+
+            web_images = Path("data/web/images")
+            web_anns = Path("data/web/annotations")
+            web_labels = Path("data/web/labels")
+            for d in (web_images, web_anns, web_labels):
+                d.mkdir(parents=True, exist_ok=True)
+
+            # Move the image into the web dataset (unless it is already there).
+            dest_img = web_images / img_path.name
+            if img_path.resolve() != dest_img.resolve():
+                if dest_img.exists():
+                    dest_img.unlink()
+                shutil.move(str(img_path), str(dest_img))
+
+            image_annotation = ImageAnnotation(
+                image_path=str(dest_img),
+                image_width=w,
+                image_height=h,
+                dice=dice_annotations,
+                source="manual",
+                timestamp=datetime.now().isoformat(),
+                is_verified=True,
+            )
+            out_path = web_anns / f"{req.image_id}.json"
+            with open(out_path, "w") as f:
+                f.write(image_annotation.model_dump_json(indent=2))
+
+            self._write_yolo_label(web_labels, req.image_id, req.annotations, w, h)
+
+            # Remove any stale annotation/label left in the batch source dirs.
+            batch_ann = Path(self.sources[source_name]["annotations"]) / f"{req.image_id}.json"
+            batch_ann.unlink(missing_ok=True)
+            batch_lbl = Path(self.sources[source_name]["annotations"]).parent / "labels" / f"{req.image_id}.txt"
+            batch_lbl.unlink(missing_ok=True)
+
+            return {"status": "committed", "count": len(dice_annotations)}
 
         @app.get("/api/config")
         def get_config():
@@ -342,13 +493,7 @@ class AnnotatorAPI:
 
             image_id = save_path.stem
 
-            # Register web source if not already present
-            if "web" not in self.sources:
-                self.sources["web"] = {
-                    "images": web_images_dir,
-                    "annotations": web_ann_dir,
-                    "read_only": False,
-                }
+            self._ensure_web_source(web_images_dir, web_ann_dir)
 
             return {"status": "saved", "image_id": image_id, "filename": filename}
 
@@ -370,12 +515,7 @@ class AnnotatorAPI:
             contents = await image.read()
             save_path.write_bytes(contents)
 
-            if "web" not in self.sources:
-                self.sources["web"] = {
-                    "images": web_images_dir,
-                    "annotations": web_ann_dir,
-                    "read_only": False,
-                }
+            self._ensure_web_source(web_images_dir, web_ann_dir)
 
             return {"status": "saved", "image_id": save_path.stem, "filename": filename}
 
@@ -620,13 +760,31 @@ class AnnotatorAPI:
 
         return app
 
+    def _ensure_web_source(self, web_images_dir: Path, web_ann_dir: Path) -> None:
+        # Register the web source only if no existing source already covers it
+        # (the default source may already point at data/web/images).
+        target = web_images_dir.resolve()
+        for src in self.sources.values():
+            if Path(src["images"]).resolve() == target:
+                return
+        self.sources["web"] = {
+            "images": web_images_dir,
+            "annotations": web_ann_dir,
+            "read_only": False,
+        }
+
     def _get_source_images(self, source_name: str) -> list[Path]:
         extensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
-        images_dir = self.sources[source_name]["images"]
+        src = self.sources[source_name]
+        image_dirs = src.get("image_dirs") or [src["images"]]
         images = []
-        for ext in extensions:
-            images.extend(images_dir.glob(f"*{ext}"))
-            images.extend(images_dir.glob(f"*{ext.upper()}"))
+        for images_dir in image_dirs:
+            images_dir = Path(images_dir)
+            if not images_dir.exists():
+                continue
+            for ext in extensions:
+                images.extend(images_dir.glob(f"*{ext}"))
+                images.extend(images_dir.glob(f"*{ext.upper()}"))
         return sorted(images)
 
     def _get_all_image_list(self, source_filter: Optional[str] = None) -> list[dict]:
@@ -634,16 +792,26 @@ class AnnotatorAPI:
         sources = [source_filter] if source_filter and source_filter in self.sources else list(self.sources.keys())
         for source_name in sources:
             source = self.sources[source_name]
+            # Batch sources are huge, dice-type-specific dumps. Only include
+            # them when explicitly requested via the source filter.
+            if source.get("batch") and source_name != source_filter:
+                continue
             ann_dir = source["annotations"]
             read_only = source.get("read_only", False)
             for img in self._get_source_images(source_name):
                 ann_path = ann_dir / f"{img.stem}.json"
                 annotated = ann_path.exists()
                 verified = False
+                has_boxes = False
+                pending_values = 0
                 if annotated:
                     try:
                         with open(ann_path) as f:
-                            verified = json.load(f).get("is_verified", False)
+                            data = json.load(f)
+                        verified = data.get("is_verified", False)
+                        dice = data.get("dice", [])
+                        has_boxes = len(dice) > 0
+                        pending_values = sum(1 for d in dice if d.get("value") is None)
                     except (json.JSONDecodeError, OSError):
                         verified = False
                 result.append({
@@ -653,8 +821,58 @@ class AnnotatorAPI:
                     "verified": verified,
                     "read_only": read_only,
                     "source": source_name,
+                    "has_boxes": has_boxes,
+                    "pending_values": pending_values,
                 })
         return result
+
+    def _build_dice_annotations(self, annotations) -> list[DiceAnnotation]:
+        result = []
+        for ann in annotations:
+            ambiguity_reasons = []
+            for r in ann.ambiguity_reasons:
+                try:
+                    ambiguity_reasons.append(AmbiguityReason(r))
+                except ValueError:
+                    pass
+            result.append(
+                DiceAnnotation(
+                    bbox=BoundingBox(
+                        x=ann.bbox.x,
+                        y=ann.bbox.y,
+                        width=ann.bbox.width,
+                        height=ann.bbox.height,
+                    ),
+                    dice_type=DiceType(ann.dice_type) if ann.dice_type else DiceType.UNKNOWN,
+                    value=ann.value,
+                    ambiguous=ann.ambiguous,
+                    ambiguity_reasons=ambiguity_reasons,
+                    d4_style=D4Style(ann.d4_style) if ann.d4_style else None,
+                    special_value=SpecialValue(ann.special_value) if ann.special_value else None,
+                )
+            )
+        return result
+
+    @staticmethod
+    def _write_yolo_label(labels_dir: Path, image_id: str, annotations, w: int, h: int) -> None:
+        labels_dir.mkdir(parents=True, exist_ok=True)
+        type_map = {"D4": 0, "D6": 1, "D8": 2, "D10": 3, "D12": 4, "D20": 5, "D100": 6}
+        yolo_lines = []
+        for ann in annotations:
+            cid = type_map.get(ann.dice_type)
+            if cid is None:
+                continue
+            xc = (ann.bbox.x + ann.bbox.width / 2) / w
+            yc = (ann.bbox.y + ann.bbox.height / 2) / h
+            bw = ann.bbox.width / w
+            bh = ann.bbox.height / h
+            xc = max(0.0, min(1.0, xc))
+            yc = max(0.0, min(1.0, yc))
+            bw = max(0.001, min(1.0, bw))
+            bh = max(0.001, min(1.0, bh))
+            yolo_lines.append(f"{cid} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+        label_path = labels_dir / f"{image_id}.txt"
+        label_path.write_text("\n".join(yolo_lines) + "\n" if yolo_lines else "")
 
     def _find_image_with_source(self, image_id: str) -> tuple[str, Optional[Path]]:
         for source_name in self.sources:
@@ -687,11 +905,9 @@ class AnnotatorAPI:
                 },
                 "dice_type": d.get("dice_type", "UNKNOWN"),
                 "value": d.get("value"),
-                "orientation_degrees": d.get("orientation_degrees"),
                 "ambiguous": d.get("ambiguous", False),
                 "ambiguity_reasons": d.get("ambiguity_reasons", []),
                 "d4_style": d.get("d4_style"),
-                "has_6_9_marker": d.get("has_6_9_marker"),
                 "special_value": d.get("special_value"),
             })
         return annotations
@@ -702,8 +918,8 @@ class AnnotatorAPI:
 
 def main():
     parser = argparse.ArgumentParser(description="Dice Annotation Tool API")
-    parser.add_argument("--images", type=str, default="data/images")
-    parser.add_argument("--output", type=str, default="data/annotations")
+    parser.add_argument("--images", type=str, default="data/web/images")
+    parser.add_argument("--output", type=str, default="data/web/annotations")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--dev-ui", type=str, default=None, help="Vite dev server URL")

@@ -39,20 +39,6 @@ export function AnnotationPanel({ annotation, config, onUpdate, readOnly }: Prop
         />
       </div>
  
-      <div>
-        <label className="block text-xs text-gray-500 mb-1">Orientation (°)</label>
-        <input
-          type="number"
-          value={annotation.orientation_degrees ?? ''}
-          onChange={(e) => onUpdate({ orientation_degrees: e.target.value ? parseFloat(e.target.value) : null })}
-          className="w-full bg-gray-700 rounded p-2 text-sm disabled:opacity-60"
-          min={0}
-          max={359}
-          step={1}
-          disabled={readOnly}
-        />
-      </div>
- 
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -64,16 +50,9 @@ export function AnnotationPanel({ annotation, config, onUpdate, readOnly }: Prop
         <span>Ambiguous</span>
       </label>
  
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={annotation.has_6_9_marker ?? false}
-          onChange={(e) => onUpdate({ has_6_9_marker: e.target.checked })}
-          className="rounded"
-          disabled={readOnly}
-        />
-        <span>Has 6/9 marker</span>
-      </label>
+      {(annotation.value === 6 || annotation.value === 9) && (
+        <div className="text-xs text-amber-400">6/9 value (orientation-sensitive)</div>
+      )}
  
       {annotation.dice_type === 'D4' && (
         <div>

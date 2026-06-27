@@ -1,13 +1,28 @@
-import type { ImageInfo, PaginatedImages, Config, Annotation } from './types'
+import type { ImageInfo, PaginatedImages, Config, Annotation, BatchType } from './types'
  
 const API_BASE = '/api'
  
-export async function fetchImages(page = 1, perPage = 100, source?: string, toVerify = false): Promise<PaginatedImages> {
+export async function fetchImages(
+  page = 1,
+  perPage = 100,
+  source?: string,
+  toVerify = false,
+  toValue = false,
+  unannotated = false
+): Promise<PaginatedImages> {
   const params = new URLSearchParams({ page: String(page), per_page: String(perPage) })
   if (source) params.set('source', source)
   if (toVerify) params.set('to_verify', 'true')
+  if (toValue) params.set('to_value', 'true')
+  if (unannotated) params.set('unannotated', 'true')
   const res = await fetch(`${API_BASE}/images?${params}`)
   return res.json()
+}
+
+export async function fetchBatchTypes(): Promise<BatchType[]> {
+  const res = await fetch(`${API_BASE}/batch/types`)
+  const data = await res.json()
+  return data.types ?? []
 }
  
 export async function fetchImage(imageId: string): Promise<ImageInfo> {
@@ -30,6 +45,22 @@ export async function saveAnnotations(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ image_id: imageId, annotations, is_verified: isVerified }),
   })
+  return res.json()
+}
+
+export async function commitBatch(
+  imageId: string,
+  annotations: Omit<Annotation, 'id'>[]
+): Promise<{ status: string; count: number }> {
+  const res = await fetch(`${API_BASE}/batch/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_id: imageId, annotations }),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.detail || 'Commit failed')
+  }
   return res.json()
 }
 

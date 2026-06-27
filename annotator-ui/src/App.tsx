@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { Annotation, ImageInfo, ImageListItem, Config, PaginatedImages } from './types'
-import { fetchImages, fetchImage, fetchConfig, saveAnnotations, deleteImage, cropImage, uploadImage, scaleImage } from './api'
+import type { Annotation, BBox, BatchType, ImageInfo, ImageListItem, Config, PaginatedImages } from './types'
+import { fetchImages, fetchImage, fetchConfig, saveAnnotations, deleteImage, cropImage, uploadImage, scaleImage, fetchBatchTypes, commitBatch } from './api'
 import { AnnotatorCanvas } from './components/AnnotatorCanvas.tsx'
 import { AnnotationPanel } from './components/AnnotationPanel.tsx'
 import { ImageNavigator } from './components/ImageNavigator'
@@ -8,6 +8,7 @@ import { BBoxList } from './components/BBoxList'
 import { CameraCapture } from './components/CameraCapture'
 import { CropModal } from './components/CropModal'
 import { StatsTracker } from './components/StatsTracker'
+import { BatchAnnotatePanel } from './components/BatchAnnotatePanel'
 import { DICE_COLORS } from './diceColors'
 
 function generateId(): string {
@@ -34,12 +35,18 @@ export default function App() {
   const [isVerified, setIsVerified] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [confirmedIds, setConfirmedIds] = useState<Set<string>>(new Set())
-  const [view, setView] = useState<'annotate' | 'verify'>('annotate')
+  const [view, setView] = useState<'annotate' | 'verify' | 'batch'>('annotate')
   const [cropTarget, setCropTarget] = useState<ImageInfo | null>(null)
   const [cropping, setCropping] = useState(false)
   const [showScaleMenu, setShowScaleMenu] = useState(false)
   const [scaling, setScaling] = useState(false)
   const [statsVersion, setStatsVersion] = useState(0)
+  // Batch template-stamp workflow (per-dice-type folders under data/web/batch).
+  const [batchTypes, setBatchTypes] = useState<BatchType[]>([])
+  const [batchSource, setBatchSource] = useState<string | null>(null)
+  const [batchDiceType, setBatchDiceType] = useState<string>('D6')
+  const [templateBBox, setTemplateBBox] = useState<BBox | null>(null)
+  const [templateValue, setTemplateValue] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const toVerify = view === 'verify'
 
@@ -52,10 +59,21 @@ export default function App() {
     setTotalVerified(data.total_verified)
   }, [])
 
+  // Fetch the image list for the active view (annotate / verify / batch).
+  const fetchActive = useCallback(
+    (p: number) => {
+      if (view === 'batch') {
+        return fetchImages(p, 100, batchSource ?? undefined, false, false, true)
+      }
+      return fetchImages(p, 100, undefined, toVerify, false)
+    },
+    [view, batchSource, toVerify]
+  )
+
   const loadPage = useCallback(async (p: number) => {
-    const data = await fetchImages(p, 100, undefined, toVerify)
+    const data = await fetchActive(p)
     applyPageData(data)
-  }, [toVerify, applyPageData])
+  }, [fetchActive, applyPageData])
 
   useEffect(() => {
     fetchConfig().then(setConfig)
@@ -91,34 +109,34 @@ export default function App() {
     if (currentIndex > 0) {
       loadImage(images[currentIndex - 1].id)
     } else if (page > 1) {
-      const data = await fetchImages(page - 1, 100, undefined, toVerify)
+      const data = await fetchActive(page - 1)
       applyPageData(data)
       if (data.images.length > 0) {
         loadImage(data.images[data.images.length - 1].id)
       }
     }
-  }, [currentIndex, images, loadImage, page, toVerify, applyPageData])
+  }, [currentIndex, images, loadImage, page, fetchActive, applyPageData])
 
   const goToNext = useCallback(async () => {
     if (currentIndex < images.length - 1) {
       loadImage(images[currentIndex + 1].id)
     } else if (page < totalPages) {
-      const data = await fetchImages(page + 1, 100, undefined, toVerify)
+      const data = await fetchActive(page + 1)
       applyPageData(data)
       if (data.images.length > 0) {
         loadImage(data.images[0].id)
       }
     }
-  }, [currentIndex, images, loadImage, page, totalPages, toVerify, applyPageData])
+  }, [currentIndex, images, loadImage, page, totalPages, fetchActive, applyPageData])
 
   const handlePageChange = useCallback(async (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return
-    const data = await fetchImages(newPage, 100, undefined, toVerify)
+    const data = await fetchActive(newPage)
     applyPageData(data)
     if (data.images.length > 0) {
       loadImage(data.images[0].id)
     }
-  }, [totalPages, loadImage, toVerify, applyPageData])
+  }, [totalPages, loadImage, fetchActive, applyPageData])
 
   const doSave = useCallback(async (verify: boolean) => {
     if (!currentImage || readOnly) return
@@ -161,13 +179,26 @@ export default function App() {
     setSaving(false)
   }, [currentImage, annotations, readOnly, goToNext, images, toVerify, applyPageData, loadImage])
 
-  const switchView = useCallback(async (next: 'annotate' | 'verify') => {
+  const switchView = useCallback(async (next: 'annotate' | 'verify' | 'batch') => {
     if (next === view) return
     setView(next)
     setSelectedId(null)
     setConfirmedIds(new Set())
     setVerifying(next === 'verify')
-    const data = await fetchImages(1, 100, undefined, next === 'verify')
+
+    if (next === 'batch') {
+      // Batch starts on the dice-type picker; images load once a type is chosen.
+      setBatchSource(null)
+      setTemplateBBox(null)
+      setTemplateValue(null)
+      setCurrentImage(null)
+      setAnnotations([])
+      const types = await fetchBatchTypes()
+      setBatchTypes(types)
+      return
+    }
+
+    const data = await fetchImages(1, 100, undefined, next === 'verify', false)
     applyPageData(data)
     if (data.images.length > 0) {
       loadImage(data.images[0].id)
@@ -176,6 +207,120 @@ export default function App() {
       setAnnotations([])
     }
   }, [view, applyPageData, loadImage])
+
+  const buildTemplateAnnotation = useCallback((bbox: BBox): Annotation => ({
+    id: generateId(),
+    bbox,
+    dice_type: batchDiceType,
+    value: templateValue,
+    ambiguous: false,
+    ambiguity_reasons: [],
+    d4_style: null,
+    special_value: null,
+  }), [batchDiceType, templateValue])
+
+  // When a batch image loads with no boxes, stamp the saved template onto it.
+  useEffect(() => {
+    if (view === 'batch' && currentImage && templateBBox && annotations.length === 0) {
+      const ann = buildTemplateAnnotation(templateBBox)
+      setAnnotations([ann])
+      setSelectedId(ann.id)
+    }
+  }, [view, currentImage, templateBBox, annotations.length, buildTemplateAnnotation])
+
+  const selectBatchType = useCallback(async (bt: BatchType) => {
+    setBatchSource(bt.source)
+    setBatchDiceType(bt.dice_type)
+    setTemplateBBox(null)
+    setTemplateValue(null)
+    setSelectedId(null)
+    const data = await fetchImages(1, 100, bt.source, false, false, true)
+    applyPageData(data)
+    if (data.images.length > 0) {
+      loadImage(data.images[0].id)
+    } else {
+      setCurrentImage(null)
+      setAnnotations([])
+    }
+  }, [applyPageData, loadImage])
+
+  // Draw of the very first template box (quick-add, no popup).
+  const handleBatchDraw = useCallback((bbox: BBox) => {
+    setTemplateBBox(bbox)
+    const ann = buildTemplateAnnotation(bbox)
+    setAnnotations([ann])
+    setSelectedId(ann.id)
+  }, [buildTemplateAnnotation])
+
+  // Dragging/resizing the box updates both the current box and the template.
+  const handleBatchUpdate = useCallback((id: string, updates: Partial<Annotation>) => {
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)))
+    if (updates.bbox) setTemplateBBox(updates.bbox)
+    if (updates.value !== undefined) setTemplateValue(updates.value)
+  }, [])
+
+  // Set the value on the current die and remember it for the next image.
+  const setBatchValue = useCallback((value: number | null) => {
+    setTemplateValue(value)
+    setAnnotations((prev) => prev.map((a) => ({ ...a, value })))
+  }, [])
+
+  const stampNext = useCallback(async () => {
+    if (!currentImage || annotations.length === 0 || saving) return
+    setSaving(true)
+    try {
+      const toSave = annotations.map(({ id: _, ...rest }) => rest)
+      // Commit moves the image into data/web/images and marks it verified.
+      await commitBatch(currentImage.id, toSave)
+      setStatsVersion((v) => v + 1)
+      setBatchTypes((prev) =>
+        prev.map((t) => (t.source === batchSource ? { ...t, annotated: t.annotated + 1 } : t))
+      )
+      // Mark committed in the list but keep it so Back still works.
+      const committedId = currentImage.id
+      setImages((prev) =>
+        prev.map((im) => (im.id === committedId ? { ...im, annotated: true, verified: true } : im))
+      )
+      const idx = images.findIndex((im) => im.id === committedId)
+      const next = images.slice(idx + 1).find((im) => !im.annotated)
+      if (next) {
+        await loadImage(next.id)
+      } else if (page < totalPages) {
+        const data = await fetchImages(page + 1, 100, batchSource ?? undefined, false, false, true)
+        applyPageData(data)
+        if (data.images.length > 0) loadImage(data.images[0].id)
+        else { setCurrentImage(null); setAnnotations([]); setSelectedId(null) }
+      } else {
+        setCurrentImage(null)
+        setAnnotations([])
+        setSelectedId(null)
+      }
+    } catch (e) {
+      setMessage('Save failed!')
+    }
+    setSaving(false)
+  }, [currentImage, annotations, saving, batchSource, images, page, totalPages, loadImage, applyPageData])
+
+  const batchBack = useCallback(() => {
+    const idx = images.findIndex((im) => im.id === currentImage?.id)
+    if (idx > 0) {
+      loadImage(images[idx - 1].id)
+    }
+  }, [images, currentImage, loadImage])
+
+  const skipBatch = useCallback(() => {
+    const idx = images.findIndex((im) => im.id === currentImage?.id)
+    if (idx >= 0 && idx < images.length - 1) {
+      loadImage(images[idx + 1].id)
+    }
+  }, [images, currentImage, loadImage])
+
+  const clearTemplate = useCallback(() => {
+    setTemplateBBox(null)
+    setTemplateValue(null)
+    setAnnotations([])
+    setSelectedId(null)
+  }, [])
 
   const handleSave = useCallback(() => doSave(isVerified), [doSave, isVerified])
 
@@ -206,14 +351,19 @@ export default function App() {
       }
       if (e.key === 'ArrowLeft') goToPrev()
       if (e.key === 'ArrowRight') goToNext()
+      if (e.key === 'Enter' && view === 'batch') {
+        e.preventDefault()
+        stampNext()
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && !readOnly && !verifying) {
         setAnnotations((prev) => prev.filter((a) => a.id !== selectedId))
         setSelectedId(null)
+        if (view === 'batch') setTemplateBBox(null)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleSave, goToPrev, goToNext, selectedId, readOnly, verifying])
+  }, [handleSave, goToPrev, goToNext, selectedId, readOnly, verifying, view, stampNext])
 
   const handleAddAnnotation = (bbox: Annotation['bbox'], diceType: string, value: number | null) => {
     const newAnn: Annotation = {
@@ -221,10 +371,8 @@ export default function App() {
       bbox,
       dice_type: diceType,
       value,
-      orientation_degrees: null,
       ambiguous: false,
       ambiguity_reasons: [],
-      has_6_9_marker: null,
       d4_style: null,
       special_value: null,
     }
@@ -343,29 +491,6 @@ export default function App() {
       <div className="w-72 bg-gray-800 flex flex-col">
         <div className="p-4 border-b border-gray-700">
           <h1 className="text-xl font-bold">Dice Annotator</h1>
-        </div>
-
-        <div className="flex border-b border-gray-700">
-          <button
-            onClick={() => switchView('annotate')}
-            className={`flex-1 p-2 text-sm font-semibold ${
-              view === 'annotate'
-                ? 'bg-gray-700 text-white'
-                : 'bg-gray-800 text-gray-400 hover:text-white'
-            }`}
-          >
-            Annotate
-          </button>
-          <button
-            onClick={() => switchView('verify')}
-            className={`flex-1 p-2 text-sm font-semibold ${
-              view === 'verify'
-                ? 'bg-blue-700 text-white'
-                : 'bg-gray-800 text-gray-400 hover:text-white'
-            }`}
-          >
-            Verify ({Math.max(0, totalAnnotated - totalVerified)})
-          </button>
         </div>
 
         {view === 'annotate' && (
@@ -553,9 +678,62 @@ export default function App() {
               </button>
             </div>
           )}
+
+          {view === 'batch' && (
+            <BatchAnnotatePanel
+              types={batchTypes}
+              source={batchSource}
+              diceType={batchDiceType}
+              value={templateValue}
+              hasTemplate={!!templateBBox}
+              hasImage={!!currentImage}
+              canGoBack={currentIndex > 0}
+              saving={saving}
+              onSelectType={selectBatchType}
+              onChangeType={() => { setBatchSource(null); setCurrentImage(null); setAnnotations([]); setTemplateBBox(null); setTemplateValue(null) }}
+              onSetValue={setBatchValue}
+              onStampNext={stampNext}
+              onSkip={skipBatch}
+              onBack={batchBack}
+              onClearTemplate={clearTemplate}
+            />
+          )}
           {message && (
             <p className="text-center text-sm text-green-400 mt-2">{message}</p>
           )}
+        </div>
+
+        <div className="flex border-t border-gray-700">
+          <button
+            onClick={() => switchView('annotate')}
+            className={`flex-1 p-2 text-sm font-semibold ${
+              view === 'annotate'
+                ? 'bg-gray-700 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+          >
+            Annotate
+          </button>
+          <button
+            onClick={() => switchView('verify')}
+            className={`flex-1 p-2 text-sm font-semibold ${
+              view === 'verify'
+                ? 'bg-blue-700 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+          >
+            Verify ({Math.max(0, totalAnnotated - totalVerified)})
+          </button>
+          <button
+            onClick={() => switchView('batch')}
+            className={`flex-1 p-2 text-sm font-semibold ${
+              view === 'batch'
+                ? 'bg-emerald-700 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-white'
+            }`}
+          >
+            Batch
+          </button>
         </div>
       </div>
 
@@ -572,15 +750,30 @@ export default function App() {
             confirmedIds={confirmedIds}
             verifying={verifying}
             onSelect={setSelectedId}
-            onAdd={handleAddAnnotation}
-            onUpdate={handleUpdateAnnotation}
+            onAdd={view === 'batch' ? handleBatchDraw : handleAddAnnotation}
+            onUpdate={view === 'batch' ? handleBatchUpdate : handleUpdateAnnotation}
             onConfirmDie={(id) => setConfirmedIds((prev) => new Set(prev).add(id))}
             readOnly={readOnly || verifying}
+            quickAddType={view === 'batch' ? batchDiceType : undefined}
           />
         ) : view === 'verify' ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-gray-400">
             <p className="text-2xl font-semibold text-green-400 mb-2">All verified 🎉</p>
             <p className="text-sm">No annotated images left to verify.</p>
+          </div>
+        ) : view === 'batch' ? (
+          <div className="h-full flex flex-col items-center justify-center text-center text-gray-400">
+            {batchSource ? (
+              <>
+                <p className="text-2xl font-semibold text-emerald-400 mb-2">All stamped 🎉</p>
+                <p className="text-sm">No images left for {batchDiceType}.</p>
+              </>
+            ) : (
+              <>
+                <p className="text-2xl font-semibold text-emerald-400 mb-2">Batch stamp</p>
+                <p className="text-sm">Pick a dice type on the left to start.</p>
+              </>
+            )}
           </div>
         ) : null}
       </div>
